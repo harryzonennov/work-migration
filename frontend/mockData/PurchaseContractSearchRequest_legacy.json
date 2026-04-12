@@ -1,0 +1,239 @@
+{
+  "draw": 1,
+  "columns": [
+    {
+      "data": "purchaseContractUIModel.uuid",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseContractUIModel.id",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseContractUIModel.name",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseContractUIModel.statusValue",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseContractUIModel.priorityCodeValue",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseContractUIModel.signDate",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseFromSupplierUIModel.partyName",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseFromSupplierUIModel.contactName",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    },
+    {
+      "data": "purchaseContractUIModel.updatedByName",
+      "name": "",
+      "searchable": true,
+      "orderable": true,
+      "search": {
+        "value": "",
+        "regex": false
+      }
+    }
+  ],
+  "order": [
+    {
+      "column": 1,
+      "dir": "asc"
+    }
+  ],
+  "start": 0,
+  "length": 15,
+  "search": {
+    "value": "",
+    "regex": false
+  },
+  "content": {
+    "headerModel": {
+      "uuid": "",
+      "priorityCode": "",
+      "productionBatchNumber": "",
+      "status": "",
+      "name": "",
+      "id": ""
+    },
+    "createdUpdateModel": {
+      "createdByName": "",
+      "createdById": "",
+      "createdTimeLow": "",
+      "createdTimeHigh": "",
+      "lastUpdateByName": "",
+      "lastUpdateById": "",
+      "lastUpdateTimeLow": "",
+      "lastUpdateTimeHigh": ""
+    },
+    "purchaseFromSupplier": {
+      "uuid": "",
+      "status": "",
+      "name": "",
+      "id": "",
+      "telephone": "",
+      "mobile": "",
+      "address": "",
+      "accountType": "",
+      "countryName": "",
+      "streetName": "",
+      "houseNumber": "",
+      "townZone": "",
+      "subArea": "",
+      "stateName": "",
+      "cityName": "",
+      "contactName": "",
+      "contactId": "",
+      "qqNumber": "",
+      "weiXinID": ""
+    },
+    "purchaseToOrg": {
+      "uuid": "",
+      "status": "",
+      "name": "",
+      "id": "",
+      "telephone": "",
+      "mobile": "",
+      "address": "",
+      "accountType": "",
+      "countryName": "",
+      "streetName": "",
+      "houseNumber": "",
+      "townZone": "",
+      "subArea": "",
+      "stateName": "",
+      "cityName": "",
+      "contactName": "",
+      "contactId": "",
+      "qqNumber": "",
+      "weiXinID": ""
+    },
+    "prevDoc": {
+      "docFlowDirection": "",
+      "targetDocType": "",
+      "targetDocMatItemUUID": "",
+      "targetDocName": "",
+      "targetDocId": "",
+      "targetDocStatus": ""
+    },
+    "prevProfDoc": {
+      "docFlowDirection": "",
+      "targetDocType": "",
+      "targetDocMatItemUUID": "",
+      "targetDocName": "",
+      "targetDocId": "",
+      "targetDocStatus": ""
+    },
+    "nextProfDoc": {
+      "docFlowDirection": "",
+      "targetDocType": "",
+      "targetDocMatItemUUID": "",
+      "targetDocName": "",
+      "targetDocId": "",
+      "targetDocStatus": ""
+    },
+    "nextDoc": {
+      "docFlowDirection": "",
+      "targetDocType": "",
+      "targetDocMatItemUUID": "",
+      "targetDocName": "",
+      "targetDocId": "",
+      "targetDocStatus": ""
+    },
+    "reservedByDoc": {
+      "docFlowDirection": "",
+      "targetDocType": "",
+      "targetDocMatItemUUID": "",
+      "targetDocName": "",
+      "targetDocId": "",
+      "targetDocStatus": ""
+    },
+    "submittedBy": {
+      "executedByUserId": "",
+      "executedByUserName": "",
+      "executionTimeHigh": "",
+      "executionTimeLow": ""
+    },
+    "approvedBy": {
+      "executedByUserId": "",
+      "executedByUserName": "",
+      "executionTimeHigh": "",
+      "executionTimeLow": ""
+    },
+    "deliveryDoneBy": {
+      "executedByUserId": "",
+      "executedByUserName": "",
+      "executionTimeHigh": "",
+      "executionTimeLow": ""
+    },
+    "itemMaterialSKU": {
+      "refMaterialSKUId": "",
+      "refMaterialSKUName": "",
+      "serialId": "",
+      "packageStandard": "",
+      "traceMode": "",
+      "traceStatus": "",
+      "supplyType": "",
+      "refMaterialTypeUUID": "",
+      "refMaterialTypeId": "",
+      "refMaterialTypeName": ""
+    }
+  }
+}

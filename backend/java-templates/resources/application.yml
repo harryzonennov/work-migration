@@ -1,0 +1,34 @@
+spring:
+  datasource:
+    # Connect to the platform schema as the default; JPA entities use schema= on each @Table
+    url: jdbc:mysql://localhost:3306/platform?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate          # Flyway manages schema — Hibernate only validates
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+        # No default_schema — each entity declares its own schema via @Table(schema=)
+        # Schemas: platform, finance, logistics, sales, production
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    # Flyway tracks migration state in the platform schema's flyway_schema_history table
+    schemas: platform,finance,logistics,sales,production
+    # V1 creates the schemas, V2 creates all tables, V3 seeds data
+    # The connection user needs CREATE DATABASE + full DML privileges on all 5 schemas
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration-ms: 86400000         # 24 hours
+
+server:
+  port: 8080
