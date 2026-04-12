@@ -61,3 +61,19 @@ The most common mistakes to avoid:
 - Next migration: `V4__...sql`
 - Location: `src/main/resources/db/migration/`
 - All table DDL uses schema prefix: `CREATE TABLE IF NOT EXISTS \`platform\`.\`tableName\``
+
+---
+
+## After-Update Summary Rule
+
+After completing any task that modifies, creates, or deletes files, you MUST append a summary
+entry to `/Users/I043125/work-migration/docs/MIGRATION_CONVERSATIONS.md` under a new
+`#### Update log — <YYYY-MM-DD>` sub-heading inside the relevant conversation, OR as a
+standalone `### Update — <topic> (<YYYY-MM-DD>)` entry if it is not tied to a specific
+conversation. The entry must list:
+
+- **Files modified** — path + one-line description of what changed
+- **Files created** — path + purpose
+- **Files deleted** — path + reason
+
+Only skip this step if the task was pure read/research with no file changes.
