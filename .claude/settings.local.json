@@ -2,20 +2,34 @@
   "permissions": {
     "allow": [
       "Read(**)",
+      "Write(**)",
+      "Edit(**)",
       "Glob(**)",
+      "Grep(**)",
       "Bash(find:*)",
       "Bash(grep:*)",
+      "Bash(rg:*)",
       "Bash(git:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(wc:*)",
       "Bash(head:*)",
+      "Bash(tail:*)",
       "Bash(sed:*)",
+      "Bash(awk:*)",
       "Bash(python3:*)",
       "Bash(mvn:*)",
       "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
       "Bash(cp:*)",
-      "Bash(mkdir:*)"
+      "Bash(mv:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(touch:*)",
+      "Bash(diff:*)",
+      "Bash(tsc:*)",
+      "Bash(cd:*)"
     ]
   }
 }

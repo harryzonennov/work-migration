@@ -160,7 +160,7 @@ The placeholder is a two-phase runtime expansion mechanism.
 
 **Phase 2 — button generation (after promise resolves)**
 
-`ProcessButtonArray.genDocActionProcessButtonMeta()` cross-references the backend list with
+`ProcessButtonArray.genDocActionButtonMeta()` cross-references the backend list with
 the controller's `getActionCodeMatrix()`, which maps human-readable action headers to integer
 action codes:
 
@@ -682,3 +682,269 @@ Changes made to fix the three blockers:
 `InputFieldUnion` now renders Ant Design Pro form fields with translated labels and
 correct ProForm namepaths that match `initialValues` structure (e.g.
 `['purchaseContractUIModel', 'signDate']`). Build succeeds.
+
+---
+
+### C9
+
+**Topic:** Process Button Rendering — Migration Plan for Editor and List Pages
+
+The current new UI renders process buttons in two completely different ways:
+- **List pages:** `AsyncPage` reads `pageMeta.processButtonMeta` + `processButtonGroupArray` and renders Ant `<Button>` / `<Dropdown>` directly.
+- **Editor pages:** `AsyncEditorPage` reads `pageMeta.toolbarButtons` (a separate pre-resolved array) and renders its own `<Button>` loop + `extraToolbar` for workflow actions.
+- **WorkflowToolbar:** A hardcoded React component that renders doc-action buttons (Submit, Approve, etc.) based on a status→buttons visibility matrix, completely bypassing the `processButtonMeta` pipeline.
+
+This is **wrong**. In the legacy UI, both editor and list pages use the **same** process button rendering pipeline:
+
+```
+Controller.getDefaultPageMeta()
+  → pageMeta.processButtonMeta     (flat buttons: save, exit, search, placeholder, etc.)
+  → pageMeta.processButtonGroupArray (dropdown button groups: New ▾ → New Module / New From Inquiry)
+       ↓
+AsyncPage.initProcessButtonFromPageMeta(oSettings)
+  → processProcessButtonMeta()       — resolves string callbacks to functions
+  → processProcessButtonGroupArray() — resolves group labels
+  → $refs.processButtonArray.convertButtonMetaToArray()
+       ↓
+ProcessButtonArray.convertButtonMetaToArray()
+  → For each button: convertButtonMetaCore() — resolves label, icon, disabled, callback
+  → For PLACEHOLDER (category: DOC_ACTION_BTN): genDocActionProcessButtonMeta()
+    → Cross-references actionCodeList (from backend) with actionCodeMatrix (from controller)
+    → Generates runtime buttons: Submit, Approve, Reject, DeliveryDone, etc.
+    → Each button's formatClass checks currentStatus ∈ preStatusList
+    → Each button's callback calls executeDocActionCore(actionCodeHeader)
+       ↓
+ProcessButtonArray template renders:
+  → cache.buttonMetaArray → <EmbeddedProcessButtonCore> for each flat button
+  → cache.buttonGroupArray → <DropdownButtonCore> + <ItemProcessButton> for each group
+```
+
+**Both editor and list pages** use this exact same pipeline. The only difference is what `processButtonMeta` contains:
+
+| Page Type | processButtonMeta | processButtonGroupArray |
+|-----------|-------------------|------------------------|
+| **Editor** (PurchaseContractEditor) | `save: {callback:'saveModule', formatClass:'displayForEdit'}`, `placeholder: {category: DOC_ACTION_BTN}`, `exit: {callback:'exitModule'}` | (none) |
+| **List** (PurchaseContractList) | `search: {callback: vm.searchModule}`, `newModule: {callback: vm.newModule}` | `[{button:{id:'newModule',...}, buttonGroup:[{callback:vm.newModule},{callback:vm.newFromInquiry},{callback:vm.newFromRequest}]}]` |
+
+The `placeholder: {category: DOC_ACTION_BTN}` entry on editor pages is **expanded at runtime** into the workflow action buttons (Submit, Approve, etc.) by `ProcessButtonArray.genDocActionProcessButtonMeta()`. This is how the legacy "WorkflowToolbar" works — it's not a separate component but part of the same process button pipeline.
+
+---
+
+#### Migration Plan
+
+**1. Migrate the legacy process button components to TypeScript, keeping all methods/properties:**
+
+| Legacy JS | New TS | Purpose |
+|-----------|--------|---------|
+| `ProcessButtonArray.js` | `src/components/control/ProcessButtonArray.ts` | Main component: `convertButtonMetaToArray()`, `genDocActionProcessButtonMeta()`, template renders `cache.buttonMetaArray` + `cache.buttonGroupArray` |
+| `EmbeddedProcessButtonCore` (inside ProcessButtonArray.js) | `src/components/control/EmbeddedProcessButtonCore.tsx` | Individual button: renders `<Button>` with icon, label, formatClass visibility, callback onClick |
+| `DropdownButtonCore` (inside ProcessButtonArray.js) | Inline or merged into ProcessButtonArray | Dropdown trigger button with arrow icon |
+| `ItemProcessButton` (inside ProcessButtonArray.js) | Inline or merged into ProcessButtonArray | Dropdown menu item |
+| `ProcessButtonConstants` | `src/components/control/ProcessButtonConstants.ts` | `placeholderCategory: { DOC_ACTION_BTN: 1 }` |
+
+At the **deepest layer**, `EmbeddedProcessButtonCore` renders an Ant Design `<Button>`. The `DropdownButtonCore` + `ItemProcessButton` combination maps to Ant Design `<Dropdown>` + `<Menu>`. But the outer orchestration (`ProcessButtonArray.convertButtonMetaToArray`, placeholder expansion, formatClass/callback resolution) must be kept identical to legacy.
+
+**2. Implement `AsyncPage.initProcessButtonFromPageMeta()` in `AsyncPage.tsx`:**
+
+This is the **starting point** for process button rendering — called by the controller after i18n is loaded. Currently missing in the new UI. Must be added as an imperative method on AsyncPage (or as a hook/effect that runs when `pageMeta` is available).
+
+The method:
+1. Calls `processProcessButtonMeta(pageMeta, pageMeta.processButtonMeta)` — resolves string callback names to actual functions via `getVueMethod()`
+2. Calls `processProcessButtonGroupArray(pageMeta, pageMeta.processButtonGroupArray)` — resolves group labels
+3. Calls `ProcessButtonArray.convertButtonMetaToArray({ processButtonMetaArray, actionCodeList, actionCodeMatrix, parentVue, labelObject })` — converts metadata to rendered button arrays, expanding DOC_ACTION_BTN placeholders
+
+**3. Remove the current ad-hoc process button rendering:**
+
+| Current (wrong) | Action |
+|-----------------|--------|
+| `AsyncPage.tsx` reads `processButtonMeta`/`processButtonGroupArray` and renders `<Button>`/`<Dropdown>` inline | **Remove** — replace with `<ProcessButtonArray>` component |
+| `AsyncEditorPage.tsx` reads `pageMeta.toolbarButtons` and renders its own button loop | **Remove** — editor buttons come from `processButtonMeta` via `ProcessButtonArray` like legacy |
+| `ServiceEditController.getProcessButtons()` / `convertProcessButtonsToJson()` that produces `toolbarButtons` | **Remove** — no longer needed; `processButtonMeta` goes directly to `ProcessButtonArray` |
+| `WorkflowToolbar.tsx` — hardcoded status→action mapping | **Remove** after `ProcessButtonArray` + DOC_ACTION_BTN placeholder expansion is working |
+
+**4. The `extraToolbar` prop on `AsyncPage` becomes unnecessary** once `ProcessButtonArray` handles all buttons (both operational like Save/Cancel and workflow like Submit/Approve). The `renderToolbar` prop also becomes unnecessary — `ProcessButtonArray` is rendered by `AsyncPage.initProcessButtonFromPageMeta()` in the same position for both editor and list pages.
+
+---
+
+#### Key Legacy Methods to Preserve
+
+**`AsyncPage.initProcessButtonFromPageMeta(oSettings)`** (AsyncPageElement.js L4173):
+- Entry point called by controller
+- Receives `actionConfigurePromise` (resolves to `actionCodeList` from backend) and `actionCodeMatrix` (from `getActionCodeMatrix()`)
+- Calls `processProcessButtonMeta()`, `processProcessButtonGroupArray()`, then `$refs.processButtonArray.convertButtonMetaToArray()`
+
+**`ProcessButtonArray.convertButtonMetaToArray(oSettings)`** (ProcessButtonArray.js L460):
+- Iterates `processButtonMetaArray`
+- For each entry: calls `convertButtonMetaCore()` to resolve label/icon/callback
+- For `placeholder` entries with `category: DOC_ACTION_BTN`: calls `genDocActionProcessButtonMeta()`
+- Stores results in `cache.buttonMetaArray` and `cache.buttonGroupArray`
+
+**`ProcessButtonArray.genDocActionProcessButtonMeta(oSettings)`** (ProcessButtonArray.js L500):
+- Takes `actionCodeList` (from backend) and `actionCodeMatrix` (from controller)
+- For each action code: generates a button with `formatClass = () => displayForActionCodeCore(...)` and `callback = () => executeDocActionCore(header)`
+- These are the runtime Submit/Approve/Reject/DeliveryDone buttons
+
+**`EmbeddedProcessButtonCore`** (ProcessButtonArray.js):
+- Renders a single `<button>` with icon, label, onClick=callback, visibility controlled by formatClass
+- In the new UI: this wraps an Ant Design `<Button>`
+
+---
+
+#### ProcessButtonArray Data Flow (postButtonMetaArray)
+
+`ProcessButtonArray` has two rendering sources:
+1. **`cache.buttonMetaArray`** — flat buttons from `processButtonMeta` (converted via `convertButtonMetaToArray`)
+2. **`cache.buttonGroupArray`** — dropdown groups from `processButtonGroupArray`
+
+Additionally, `EmbeddedProcessButtonArray` (used in search sections) accepts a **`postButtonMetaArray`** prop — this is a secondary source of button groups rendered after the main buttons. It handles both single buttons (`postButtonMeta.button.label` exists) and dropdown groups (`postButtonMeta.buttonGroup` exists).
+
+---
+
+#### Legacy File Locations
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `admin/js/component/basicElements/AsyncPageElement.js` L4173-4280 | ~107 | `initProcessButtonFromPageMeta()`, `processProcessButtonMeta()`, `processProcessButtonGroupArray()` |
+| `admin/js/component/basicElements/ProcessButtonArray.js` | ~550 | Full component: `ButtonCore`, `EmbeddedProcessButtonCore`, `DropdownButtonCore`, `ItemProcessButton`, `ProcessButtonArray`, `ProcessButtonConstants` |
+| `admin/js/component/basicElements/EmbeddedProcessButtonArray.js` | ~120 | Section-level button array with `postButtonMetaArray` |
+
+---
+
+**Status:** Plan only — implementation not started. The current `WorkflowToolbar` + `toolbarButtons` + inline `<Button>` rendering continues to work as-is until this migration is executed.
+
+---
+
+### C10
+
+**Topic:** DocumentItemMultiSelect Framework Migration — from legacy jQuery/Vue 2 modal to React/Ant Design
+
+**Background:**
+
+The `DocumentItemMultiSelect` is the cross-document item selection framework. When a user clicks a workflow action like "Delivery Done" on a Purchase Contract, a modal opens allowing them to select material items from the source document to generate a new target document (e.g. Inbound Delivery). This framework has 3 layers and 28 legacy files (~5500 lines total):
+
+```
+Layer 1: Factory + Constants
+  DocumentItemMultiSelectFactory.js (229 lines) — maps targetDocType → MultiSelect subclass
+  USE_CASE enum: CROSS_DOC_CREATION(1), MERGE_DOC(2), SPLIT_DOC(3), etc.
+
+Layer 2: Base components
+ .js (1196 lines) — modal lifecycle, 6-step init, source/target selection, confirm→POST
+  SrcSelectInputUnion.js (648 lines) — source document selector, maps srcDocType → subclass
+
+Layer 3: Document-specific subclasses (26 files)
+  12 MultiSelect subclasses: PurchaseContract, InboundDelivery, OutboundDelivery, etc.
+  14 SrcSelectInput subclasses: PurchaseContract, InboundDelivery, PurchaseRequest, etc.
+```
+
+**Legacy data flow:**
+```
+User clicks "Delivery Done" on PurchaseContract editor
+  → executeDocActionCore('deliveryDone')
+  → detects docItemMultiSelectConfig → executeDocItemSelectWrapper()
+  → DocumentItemMultiSelectFactory.initBatchSelection(config)
+  → Creates InboundDeliveryMultiSelect (based on targetDocType)
+  → initBatchSelectionTemplate() (6-step init)
+  → Bootstrap Modal opens (75% width)
+  → User selects source doc → loads material items → multi-select items → confirm
+  → POST selected UUIDs to inboundDelivery/generateNextDocBatch
+  → Backend creates InboundDelivery with selected items
+```
+
+**Migration approach — two phases:**
+
+**Phase 1: TypeScript class porting (COMPLETED)**
+
+All 3 layers ported to TypeScript classes in `src/components/doc/`:
+
+| Legacy JS file | New TS file | Status |
+|---|---|---|
+| `DocumentItemMultiSelectFactory.js` | `DocumentItemMultiSelectFactory.ts` | Done — USE_CASE, getModelIdByTargetDocType, subclass registry |
+| `DocumentItemMultiSelect.js` | `DocumentItemMultiSelect.ts` | Done — full lifecycle, HTTP calls wired to apiPost/apiGet |
+| `SrcSelectInputUnion.js` | `SrcSelectInputUnion.ts` | Done — getValue, genTargetUrl, createByDocType factory |
+| `PurchaseContractMultiSelect.js` | `supplyChain/PurchaseContractMultiSelect.ts` | Done |
+| `InboundDeliveryMultiSelect.js` | `supplyChain/InboundDeliveryMultiSelect.ts` | Done — warehouse fields, custom confirmToGenerate |
+| `PurchaseContractSelectInput.js` | `supplyChain/PurchaseContractSelectInput.ts` | Done — genTargetUrl per useCase |
+| `InboundDeliverySelectInput.js` | `supplyChain/InboundDeliverySelectInput.ts` | Done |
+
+Migration rules applied:
+- `Vue.extend` → TypeScript class
+- `data()` → class properties
+- `methods` → methods, `computed` → getters
+- `static` methods → `static` methods on class
+- jQuery/Select2/Bootstrap calls → replaced with apiPost/apiGet or React callbacks
+- Template HTML → separate React TSX component
+
+**Phase 2: React rendering shell + wiring (COMPLETED 2026-04-17)**
+
+Created `DocItemSelectionModal.tsx` and wired `executeDocItemSelectWrapper`:
+
+| Component | What it does |
+|---|---|
+| `DocItemSelectionModal.tsx` (NEW) | Ant Design Modal wrapping the TS class layer: Descriptions for src/target doc info, Table with rowSelection for item picking, Confirm button |
+| `DocumentItemMultiSelectFactory.ts` | Added `createChildByTargetDocType()` — static registry mapping targetDocType → subclass constructor; replaced `filterChildComponents()` TODO |
+| `SrcSelectInputUnion.ts` | Added `createByDocType()` — static factory method mapping sourceDocType → subclass constructor |
+| `DocumentItemMultiSelect.ts` | Wired 3 HTTP stubs: `loadSrcDataWrapper()` → apiPost, `genTargetDocFromMultipleSelection()` → apiPost, `loadTargetDocument()` → apiGet. Added React callback hooks: `onSrcItemsLoaded`, `onModalClose`, `onGenerationDone`, `getSelectedUUIDsFn` |
+| `ServiceEditController.ts` | Added `openDocItemSelectionModal` to `ServiceEditControllerDeps`; replaced TODO in `executeDocItemSelectWrapper` with callback invocation |
+| `usePurchaseContractEditController.ts` | Added `multiSelectConfig` state; passed `setMultiSelectConfig` as `openDocItemSelectionModal` into deps |
+| `PurchaseContractEditPage.tsx` | Renders `<DocItemSelectionModal>` alongside `<AsyncEditorPage>` |
+
+**Wiring architecture:**
+```
+PurchaseContractEditPage.tsx
+  useState<multiSelectConfig>          ← React state controls modal visibility
+  │
+  ├── AsyncEditorPage                  ← existing editor
+  │     └── ProcessButtonArray
+  │           └── "Delivery Done" button onClick
+  │                 → controller.executeDocActionCore('deliveryDone')
+  │                 → detects docItemMultiSelectConfig
+  │                 → controller.executeDocItemSelectWrapper(oSettings)
+  │                 → deps.openDocItemSelectionModal(config)  ← sets React state
+  │
+  └── DocItemSelectionModal            ← NEW
+        config={multiSelectConfig}
+        │
+        ├── useEffect: factory.initBatchSelection(config)
+        │     → creates InboundDeliveryMultiSelect instance
+        │     → hooks React callbacks into instance
+        │     → instance.initBatchSelectionTemplate() (6-step init)
+        │     → loads source items via apiPost
+        │
+        ├── <Table rowSelection>       ← user picks items
+        │
+        └── Confirm button
+              → multiSelect.confirmToGenerate()
+              → apiPost to genTargetDocBatch endpoint
+              → onDone → refreshEditView
+```
+
+**Remaining work (Phase C — not started):**
+
+10 more MultiSelect subclasses + 12 more SrcSelectInput subclasses need porting for other document types. Each is ~100-200 lines of mostly config. Mechanical once the pattern is proven:
+
+| MultiSelect subclass | SrcSelectInput subclass |
+|---|---|
+| OutboundDeliveryMultiSelect | OutboundDeliverySelectInput |
+| InventoryTransferOrderMultiSelect | InventoryTransferOrderSelectInput |
+| PurchaseRequestMultiSelect | PurchaseRequestSelectInput |
+| PurchaseReturnMultiSelect | PurchaseReturnOrderSelectInput |
+| InventoryCheckOrderMultiSelect | WarehouseStoreItemSelectInput |
+| WarehouseStoreMultiSelect | QualityInspectOrderSelectInput |
+| WasteProcessOrderMultiSelect | WasteProcessOrderSelectInput |
+| SalesContractMultiSelect | SalesContractSelectInput |
+| SalesReturnOrderMultiSelect | SalesReturnOrderSelectInput |
+| SerExtendPageSettingMultiSelect | InquirySelectInput, SalesForcastSelectInput, SerExtendPageSettingSelectInput |
+
+For each new document type: (1) port the subclass .ts file, (2) add an entry to the registry in `DocumentItemMultiSelectFactory.createChildByTargetDocType()` and `SrcSelectInputUnion.createByDocType()`.
+
+---
+
+#### Update log — 2026-04-17
+
+- **Files created** — `/Users/I043125/work2/IntelligentUI/src/components/doc/DocItemSelectionModal.tsx` — React modal component wrapping DocumentItemMultiSelect framework
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/components/doc/DocumentItemMultiSelectFactory.ts` — added subclass registry (`createChildByTargetDocType`), lazy imports, implemented `filterChildComponents`, `getActiveChild`, changed `initBatchSelection` return type
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/components/doc/SrcSelectInputUnion.ts` — added `createByDocType()` static factory method
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/components/doc/DocumentItemMultiSelect.ts` — wired 3 HTTP stubs to apiPost/apiGet, added React callback hooks (onSrcItemsLoaded, onModalClose, onGenerationDone, getSelectedUUIDsFn), updated `setSrcModelId()` to instantiate real subclass, updated `_getSelectedUUIDs()` to delegate to callback
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/controllers/ServiceEditController.ts` — added `openDocItemSelectionModal` to `ServiceEditControllerDeps`, replaced TODO in `executeDocItemSelectWrapper` with callback invocation
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/pages/logistics/purchaseContract/usePurchaseContractEditController.ts` — added `multiSelectConfig` state, passed as `openDocItemSelectionModal` into deps, returned from hook
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/pages/logistics/purchaseContract/PurchaseContractEditPage.tsx` — renders `<DocItemSelectionModal>` alongside `<AsyncEditorPage>`
