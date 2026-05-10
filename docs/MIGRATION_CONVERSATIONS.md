@@ -1879,3 +1879,517 @@ Third pass of wire-todos on `AbsInput.tsx` after `ServiceFieldMetaUtility` was m
 | Line | Reference | Status | Action |
 |------|-----------|--------|--------|
 | 223 | `ServiceFieldMetaUtility.executeWatchHandlerUnion` | Class+method now exist in ServiceFieldMetaUtility.ts | **Wired** |
+
+#### Update log — 2026-04-25
+
+**Files modified:**
+- `docs/ComparasionComponents/InputFields.md` — complete rewrite: thorough comparison of legacy AbsInput (Vue 2) vs new AbsInput (React/TS) covering all props, data, computed, methods, handlers, validation, static properties, and key behavioral differences
+- `IntelligentUI/src/components/page/AsyncPage.tsx` — moved static utility functions (`equalsTrueByControllerMethod`, `getValueOrFunction`, `genBasicTabClass`, `getOverallSectionList`) onto `AsyncPage` component object as static properties, matching legacy `AsyncPage.xxx()` call pattern; removed `AsyncPageUtil` class
+- `IntelligentUI/src/components/control/AbsInput.tsx` — renamed `handleChange` → `valueChangeHandler` (matches legacy); updated import to use `AsyncPage.equalsTrueByControllerMethod`; moved inline `import()` type cast for `WatchHandler` to file-level import
+- `IntelligentUI/src/components/page/AsyncUnion.tsx` — updated import to use `AsyncPage.equalsTrueByControllerMethod`
+- `IntelligentUI/eslint.config.js` — added `curly` and `brace-style` rules to enforce multi-line function bodies
+
+#### Update log — 2026-04-25 (2)
+
+**Files modified:**
+- `docs/ComparasionComponents/InputFields.md` — removed all "no change" rows from every table; document now shows only differences between legacy and new UI
+
+#### Update log — 2026-04-25 (3)
+
+**Files modified:**
+- `docs/ComparasionComponents/InputFields.md` — added InputField class comparison section (architecture, props, rendering differences between legacy Vue.extend wrapper and new React forwardRef component with three rendering paths)
+
+#### Update log — 2026-04-25 (4)
+
+**Files modified:**
+- `docs/ComparasionComponents/InputFields.md` — added Select2Field/SelectField comparison (12 methods, state, rendering) and TextAreaField comparison (props, computed, rendering, methods); trimmed framework-only differences per exclude list
+
+#### Update log — 2026-04-25 (5)
+
+**Files modified:**
+- `docs/ComparasionComponents/InputFields.md` — added ModalSelect2Field/ModalSelectField comparison (inheritance, 5 methods, rendering, TODOs) and ModalSelect2Ele/ModalSelectEle comparison (4 methods, rendering)
+
+#### Update log — 2026-04-26
+
+**Files created:**
+- `.claude/skills/compare-component/skill.md` — new skill for batch-generating differences-only comparisons between legacy Vue 2 and new React/TS components
+
+**Files modified:**
+- `IntelligentUI/src/components/control/SelectField.tsx` — replaced two misleading `TODO: wire initSelectConfigure` comments with explanatory comments noting that legacy jQuery select2 event binding is fully replaced by Ant Design `<Select onChange>` and `<ProFormSelect request>`
+
+#### Update log — 2026-04-26 (2)
+
+**Files modified:**
+- `IntelligentUI/src/components/control/SelectField.tsx` — fixed bug where select fields in DocumentItemMultiSelect showed UUIDs instead of labels. Root cause: in the `outsideProForm` path, `<Select>` rendered with `value` before async options loaded, so Ant Design displayed the raw key. Fix: added `loadingOptions` state, set `loading` prop on `<Select>`, and defer displaying `value` until options are available
+- `work-migration/.claude/skills/compare-component/skill.md` — moved skill from user-level to project-level directory
+
+---
+
+### Bug Fix — SelectField shows UUIDs instead of labels in DocumentItemMultiSelect (2026-04-26)
+
+#### Symptom
+In DocumentItemMultiSelect, all select fields (e.g. `meta.targetDocumentType`, `cache.targetDocument.uuid`) displayed raw UUID keys instead of human-readable labels. The same select fields worked correctly in standard AsyncPage editor pages. Backend API data was correct.
+
+#### Root Cause (two layers)
+
+**Layer 1: Rendering path difference**
+
+DocumentItemMultiSelect renders `<AsyncEditUnion>` with a `sectionMeta` that has no `parentContentPath` property. This triggers a different rendering chain than standard AsyncPage:
+
+```
+DocumentItemMultiSelect
+  → AsyncEditUnion (parentContentPath = undefined, from sectionMeta)
+    → AsyncField (no ProForm path, falls through to legacy path)
+      → InputFieldUnion (namePath = undefined → outsideProForm = true)
+        → SelectField (outsideProForm path: standalone <Select>)
+```
+
+Standard AsyncPage:
+```
+AsyncPage (ProForm wraps everything)
+  → AsyncEditUnion (parentContentPath = '' from sectionMeta)
+    → AsyncField (ProForm path activated)
+      → InputFieldUnion (namePath = fieldName → outsideProForm = false)
+        → SelectField (ProFormSelect path: <ProFormSelect request={...}>)
+```
+
+In the `outsideProForm=false` path, `<ProFormSelect request={fn}>` internally waits for the async request to resolve before rendering — so options are always available when the value displays.
+
+In the `outsideProForm=true` path, we manually manage option loading via `useEffect` + `loadMetaData()` + `setSelectOptions` state.
+
+**Layer 2: getMetaDataUrl not available at mount time**
+
+In DocumentItemMultiSelect, the select field's `settings.getMetaDataUrl` comes from `SrcSelectInputUnion.searchSrcDocMeta.url`, which defaults to `undefined` (line 109 in SrcSelectInputUnion.ts). The real URL is set later via `updateSrcSelectConfig()` → `updateConfig()` → `setMeta()`.
+
+The `useEffect` that triggers `loadMetaData()` originally read the URL from `fieldMetaFromProps?.settings` — the **initial prop value**, which is `undefined` at mount. When `updateConfig()` later updated `absInput.meta.settings` with the real URL, the `useEffect` did NOT re-fire because its dependency (`fieldMetaFromProps?.settings`) was still the stale prop reference.
+
+Result: `<Select>` rendered with `value="<UUID>"` but `options=[]`. Ant Design can't find a matching option label, so it displays the raw UUID string.
+
+#### Fix (SelectField.tsx)
+
+**Change 1: Track loading state**
+```typescript
+const [loadingOptions, setLoadingOptions] = useState(false);
+```
+In `loadMetaData()`:
+```typescript
+setLoadingOptions(true);
+ServiceUtilityHelper.loadMetaRequestForSelect(metaOpts)
+    .then(setSelectOptions)
+    .catch(() => {})
+    .finally(() => { setLoadingOptions(false); });
+```
+
+**Change 2: Defer value display until options loaded**
+```typescript
+// outsideProForm path
+const displayValue = (fieldValue != null && !loadingOptions) ? String(fieldValue) : undefined;
+<Select loading={loadingOptions} value={displayValue} options={options} ... />
+```
+
+**Change 3 (key fix): Read URL from reactive state, not static props**
+```typescript
+// BEFORE (broken): read from initial prop — never updates
+const settingsForEffect = fieldMetaFromProps?.settings as Record<string, unknown> | undefined;
+const getMetaDataUrlForEffect = settingsForEffect?.['getMetaDataUrl'] as string | undefined;
+
+// AFTER (fixed): read from absInput.meta.settings via getSelectSettings() — updates when setMeta() is called
+const currentSettings = getSelectSettings();
+const getMetaDataUrlForEffect = currentSettings?.['getMetaDataUrl'] as string | undefined;
+```
+
+Now when `updateConfig()` calls `absInput.setMeta()` with the real URL, `getMetaDataUrlForEffect` changes from `undefined` → actual URL, the `useEffect` re-fires, `loadMetaData()` runs, options load, and the `<Select>` renders labels correctly.
+
+#### Files modified
+- `IntelligentUI/src/components/control/SelectField.tsx` — added `loadingOptions` state, deferred value display, changed `useEffect` dependency from static prop to reactive `getSelectSettings()` state
+
+#### Verification
+1. Open DocumentItemMultiSelect modal → select fields should show labels, not UUIDs
+2. Standard AsyncPage editor pages should still work (unaffected — they use ProFormSelect path)
+3. Select fields with static options (no `getMetaDataUrl`) should still work
+
+#### Legacy UI equivalent pattern
+
+The legacy Vue 2 UI solves the same "URL undefined at mount time" problem through **explicit postUpdate cascade** combined with **defensive early-exit checks** — no Vue watchers on the URL.
+
+**Initialization phase** (mount time):
+- `SrcSelectInputUnion.searchSrcDocMeta.url` = `undefined` (SrcSelectInputUnion.js:109)
+- Field metadata created with `getMetaDataUrl: vm.searchSrcDocMeta.url` → `undefined`
+- `Select2Field.loadMetaData()` is called but exits early because `settings.getMetaDataUrl` is falsy (AsyncControlElement.js:803)
+
+**Configuration update phase** (URL becomes available):
+- `initCopyBasicConfig(oSettings)` copies the real URL into `vm.searchSrcDocMeta` via `ServiceUtilityHelper.defCopyFieldsReflective` (SrcSelectInputUnion.js:214)
+- Vue reactivity via `vm.$set` ensures the reference updates
+
+**Data loading cascade** (postUpdate triggers reload):
+```
+DocumentItemMultiSelect.initBatchSelection()                    (L378)
+  → vm.$nextTick → vm.$nextTick → vm.postUpdate()              (L378-389, double $nextTick)
+    → SrcSelectInputUnion.postUpdate()                          (L400-408)
+      → ServiceVueUtility.batchExecuteSubRefMethod()            (cascades to all child refs)
+        → Select2Field.postUpdate()                             (L760-765)
+          → Select2Field.updateConfig()                         (L767-786)
+            → vm.$set(vm.meta, 'settings', newSettings)         (updates settings reference)
+            → vm.initSelectConfigure()                          (jQuery select2 widget init)
+            → vm.$nextTick → vm.loadMetaData()                  (L784-785)
+              → AsyncPage.getValueOrFunction(settings.getMetaDataUrl)  (L805, reads CURRENT value)
+              → ServiceUtilityHelper.loadMetaRequest(...)        (L811-827, HTTP call succeeds)
+```
+
+**Key legacy defensive checks:**
+| Check | Location | Purpose |
+|-------|----------|---------|
+| `if (!settings) return` | AsyncControlElement.js:799 | Skip if no settings object |
+| `if (settings.getMetaDataUrl)` | AsyncControlElement.js:803 | Only proceed if URL is truthy |
+| `if (oSettings.url)` | AsyncControlElement.js:862 | Double-check URL before HTTP call |
+| Double `$nextTick` | DocumentItemMultiSelect.js:378-389 | Ensures DOM and Vue updates settle before postUpdate |
+| `AsyncPage.getValueOrFunction()` | AsyncControlElement.js:805 | Dynamically evaluates URL at call-time, not init-time |
+
+**Legacy vs New UI pattern comparison:**
+
+| Aspect | Legacy (Vue 2) | New (React) |
+|--------|---------------|-------------|
+| Re-trigger mechanism | Explicit `postUpdate()` cascade via `batchExecuteSubRefMethod` | `useEffect` re-fires when `getMetaDataUrlForEffect` changes from `undefined` → URL |
+| URL evaluation timing | Dynamic at call-time via `AsyncPage.getValueOrFunction()` | Reactive via `getSelectSettings()` reading `absInput.meta.settings` state |
+| Async boundary | Double `vm.$nextTick()` | `setTimeout(0)` in `updateConfig()` + React re-render cycle |
+| Defensive guard | `if (settings.getMetaDataUrl)` early exit in `loadMetaData()` | Same — `if (!getMetaDataUrl) return` in `loadMetaData()` |
+| Loading indicator | None (select2 widget handles internally) | `<Select loading={loadingOptions}>` + deferred value display |
+| Why it works | `postUpdate` is called AFTER URL is set; `loadMetaData` reads current value at call-time | `useEffect` dependency on reactive state re-fires when `setMeta` updates settings with real URL |
+
+---
+
+### Update — compare-component InputFieldUnion (2026-05-03)
+
+#### Files modified
+- `docs/ComparasionComponents/InputFields.md` — appended InputFieldUnion comparison section (props, data/state, computed, methods, static methods, component map, TODOs)
+
+---
+
+### Update — Wire checkValidateSave/checkValidateSubmit through forwardRef chain (2026-05-07)
+
+#### Files modified
+- `IntelligentUI/src/components/control/AbsInput.tsx` — added `checkValidateSave` and `checkValidateSubmit` to `FieldHandle` interface
+- `IntelligentUI/src/components/control/InputField.tsx` — exposed validation methods in useImperativeHandle
+- `IntelligentUI/src/components/control/SelectField.tsx` — exposed validation methods in useImperativeHandle
+- `IntelligentUI/src/components/control/TextAreaField.tsx` — exposed validation methods in useImperativeHandle
+- `IntelligentUI/src/components/control/DateField.tsx` — exposed validation methods (return []) in useImperativeHandle
+- `IntelligentUI/src/components/control/NumberField.tsx` — exposed validation methods (return []) in useImperativeHandle
+- `IntelligentUI/src/components/control/UploadField.tsx` — exposed validation methods (return []) in useImperativeHandle
+- `IntelligentUI/src/components/control/AsyncField.tsx` — added to AsyncFieldHandle, added aggregation methods iterating childRefs
+- `IntelligentUI/src/components/page/AsyncEditUnion.tsx` — forwarded validation calls to asyncFieldRef
+
+---
+
+### Update — Always use ProForm: Remove outsideProForm / legacy Bootstrap rendering path (2026-05-06)
+
+Eliminated the dual-rendering architecture. Fields now always render via ProForm components (`ProFormText`, `ProFormSelect`, etc.). The `outsideProForm` concept is removed — `namePath` always exists, and `parentContentPath` defaults to `''` when not provided.
+
+**Key design change**: Field names with dot-paths (e.g. `'cache.srcDocument.uuid'`) are now split on `.` to produce `['cache', 'srcDocument', 'uuid']` so ProForm resolves nested object access naturally.
+
+#### Files modified
+- `IntelligentUI/src/components/page/AsyncEditUnion.tsx` — default `parentContentPath` to `''` instead of undefined
+- `IntelligentUI/src/components/page/DocFlowSection.tsx` — pass `parentContentPath=""` to AsyncField
+- `IntelligentUI/src/components/doc/DocumentItemMultiSelect.tsx` — wrap modal body in `<ProForm>` with formRef
+- `IntelligentUI/src/components/control/AsyncField.tsx` — removed legacy Bootstrap rendering path; single ProForm path with dot-split namePath; removed AbsInputEle usage
+- `IntelligentUI/src/components/control/InputFieldUnion.tsx` — removed `outsideProForm` derivation and from childProps
+- `IntelligentUI/src/components/control/InputField.tsx` — removed standalone `<Input>` and legacy `<AbsInput>` paths; keeps only `<ProFormText>`
+- `IntelligentUI/src/components/control/SelectField.tsx` — removed standalone `<Select>` and legacy `<select>` paths; keeps only `<ProFormSelect>`
+- `IntelligentUI/src/components/control/TextAreaField.tsx` — removed standalone `<Input.TextArea>` and legacy `<textarea>` paths; keeps only `<ProFormTextArea>`
+- `IntelligentUI/src/components/control/DateField.tsx` — removed standalone `<DatePicker>` path; keeps only `<ProFormDatePicker>`
+- `IntelligentUI/src/components/control/NumberField.tsx` — removed standalone `<InputNumber>` path; keeps only `<ProFormDigit>`
+- `IntelligentUI/src/components/control/UploadField.tsx` — removed standalone `<Upload>` path; keeps only `<ProForm.Item>` wrapper
+- `IntelligentUI/src/components/control/AbsInput.tsx` — removed `outsideProForm` from `AbsInputProps` interface
+- `IntelligentUI/src/components/control/AbsInputEle.tsx` — marked as `@deprecated`
+
+---
+
+### Update — Merge ChildFieldProps into AbsInputProps (2026-04-29)
+
+#### Files modified
+- `src/components/control/AbsInput.tsx` — merged 11 ChildFieldProps-only properties into AbsInputProps (all optional); removed ChildFieldProps interface
+- `src/components/control/InputFieldUnion.tsx` — changed import and `childProps` type from `ChildFieldProps` to `AbsInputProps`
+- `src/components/control/InputField.tsx` — removed ChildFieldProps import; simplified forwardRef type to `AbsInputProps`; removed type cast
+- `src/components/control/SelectField.tsx` — removed ChildFieldProps import; simplified forwardRef type to `SelectFieldProps`; replaced `'outsideProForm' in props` guards with direct `props.outsideProForm`
+- `src/components/control/TextAreaField.tsx` — removed ChildFieldProps import; simplified forwardRef type to `TextAreaFieldProps`; removed type cast
+- `src/components/control/DateField.tsx` — changed type from `ChildFieldProps` to `AbsInputProps`
+- `src/components/control/NumberField.tsx` — changed type from `ChildFieldProps` to `AbsInputProps`
+
+---
+
+### Update — Fix validation methods to return error detail arrays (2026-05-03)
+
+#### Files modified
+- `IntelligentUI/src/components/control/AbsInput.tsx` — changed `checkValidateInput()` to return the actual `failedArray` from `getDefValidateCheckArray` (was returning boolean); updated `checkValidateSave()` and `checkValidateSubmit()` to pass through `checkValidateInput()` directly (was discarding detail with `[{ error: true }]`)
+
+---
+
+### Update — Add getFieldMeta/getFieldName to FieldHandle interface (2026-05-08)
+
+#### Files modified
+- `IntelligentUI/src/components/control/AbsInput.tsx` — added `getFieldMeta` and `getFieldName` to `FieldHandle` interface
+- `IntelligentUI/src/components/control/InputField.tsx` — exposed `getFieldMeta`/`getFieldName` via useImperativeHandle (delegates to useAbsInput)
+- `IntelligentUI/src/components/control/SelectField.tsx` — exposed `getFieldMeta`/`getFieldName` via useImperativeHandle (delegates to useAbsInput)
+- `IntelligentUI/src/components/control/TextAreaField.tsx` — exposed `getFieldMeta`/`getFieldName` via useImperativeHandle (delegates to useAbsInput)
+- `IntelligentUI/src/components/control/DateField.tsx` — exposed `getFieldMeta`/`getFieldName` via useImperativeHandle (returns from props)
+- `IntelligentUI/src/components/control/NumberField.tsx` — exposed `getFieldMeta`/`getFieldName` via useImperativeHandle (returns from props)
+- `IntelligentUI/src/components/control/UploadField.tsx` — exposed `getFieldMeta`/`getFieldName` via useImperativeHandle (returns from props)
+- `IntelligentUI/src/components/control/AbsInputEle.tsx` — added `getFieldMeta`/`getFieldName` + `checkValidateSave`/`checkValidateSubmit` aggregation to useImperativeHandle
+- `IntelligentUI/src/components/page/AsyncEditSection.tsx` — added `getFieldMeta`/`getFieldName` (returns undefined) + `checkValidateSave`/`checkValidateSubmit` aggregation to useImperativeHandle
+- `IntelligentUI/src/components/page/AsyncEditUnion.tsx` — added `getFieldMeta`/`getFieldName` (returns undefined) to useImperativeHandle
+- `work-migration/docs/ComparasionComponents/InputFieldUnion.md` — updated comparison: marked `getFieldMeta` as migrated
+
+---
+
+### Plan — Migrate `InputFieldUnion.setFieldValueWrapper` and sync field changes to parentContent (2026-05-08)
+
+#### Problem
+
+In legacy Vue 2, `InputFieldUnion.setFieldValueWrapper(oSettings)` writes a field value back to `parentContent` (the shared data object) using Vue's reactive `$set`. 
+This keeps `parentContent` in sync with user edits so that:
+- Watch handlers can read current field values via `content` parameter
+- `fetchFieldValueWrapper` returns current values (not stale initial data)
+- Label/popup metadata resolves correctly at runtime
+- updatePrice logic and field-to-field dependencies work
+
+In the new React UI, ProForm manages field state internally. `parentContent` is passed down as **read-only initial data** and is **never updated** during editing. 
+This means watch handlers, updatePrice, and any runtime logic reading from `parentContent` will see stale initial values.
+
+#### Legacy Implementation
+
+**`InputFieldUnion.setFieldValueWrapper(oSettings)`** — static method at `AsyncControlElement.js:1469-1488`:
+```javascript
+InputFieldUnion.setFieldValueWrapper = function(oSettings) {
+    var vm = oSettings.vm;
+    var newValue = oSettings.newValue;
+    var fieldName = oSettings.fieldName;
+    var fieldMeta = oSettings.fieldMeta ? oSettings.fieldMeta : vm.fieldMeta;
+    if (!fieldName) {
+        fieldName = InputFieldUnion.fetchFieldName(fieldMeta);
+    }
+    var parentContent = oSettings.parentContent ? oSettings.parentContent : vm.parentContent;
+    ServiceUtilityHelper.setFieldValueWrapper({
+        vm: vm, newValue: newValue, parentContent: parentContent, fieldName: fieldName
+    });
+    if (!ServiceUtilityHelper.checkEqualsTrue(oSettings.blockEvent)) {
+        vm.$emit('input', newValue);
+    }
+};
+```
+
+**`ServiceUtilityHelper.setFieldValueWrapper(oSettings)`** — handles dot-path resolution:
+```javascript
+ServiceUtilityHelper.setFieldValueWrapper = function(oSettings) {
+    var vm = oSettings.vm;
+    var fieldName = oSettings.fieldName;
+    var newValue = oSettings.newValue;
+    var parentContent = oSettings.parentContent ? oSettings.parentContent : vm.parentContent;
+    var parentPath = ServiceUtilityHelper.getParentPath(fieldName);
+    var pathElements = ServiceUtilityHelper.parseToPathElements(fieldName);
+    if (parentPath) {
+        var tmpParentContent = ServiceUtilityHelper.fetchObjValueByPath(parentContent, parentPath);
+        var tmpFieldName = pathElements[pathElements.length - 1];
+        vm.$set(tmpParentContent, tmpFieldName, newValue);
+    } else {
+        vm.$set(parentContent, fieldName, newValue);
+    }
+};
+```
+
+**Callers in legacy** (9 call sites across 2 files):
+1. Date picker callback — sets selected date
+2. `setDefaultKeyHandler` — writes key field value from selection
+3. `setDefaultInitKeyHandler` — writes initial key value
+4. `setToValue` (ModalSelect2) — writes UUID from modal selection
+5. `comSubFieldRefValue` setter — with `blockEvent: true`
+6. `comFieldValue` setter — main v-model setter
+7-9. `SubSelectUnion.setValueToFieldMeta` — writes to content with `blockEvent: true`, plus mapTo field
+
+#### New UI Current State
+
+- `ServiceUtilityHelper.setFieldValueWrapper` **already exists** in new project (`ServiceUtilityHelper.ts:2120-2143`) 
+- — handles nested paths, uses plain `obj[key] = val` assignment (no Vue `$set`)
+- `parentContent` is created once in `ServiceEditController.buildAsyncPageMeta()` and never updated
+- ProForm uses `initialValues` (one-time) — no `onValuesChange` is connected
+- Watch handlers pass `props.parentContent` as `content` — reads stale initial data
+
+#### Plan: Implementation Steps
+
+##### Step 1: Add `deepMergeContent` utility to ServiceUtilityHelper.ts
+
+A recursive merge function that walks a nested object and assigns leaf values into a target. This matches ProForm's `onValuesChange` output shape (nested objects for array namePaths like `['cache', 'srcDocument', 'uuid']` → `{cache: {srcDocument: {uuid: 'val'}}}`).
+
+```typescript
+export function deepMergeContent(
+    target: Record<string, unknown>,
+    source: Record<string, unknown>
+): void {
+    for (const key of Object.keys(source)) {
+        const sourceVal = source[key];
+        if (sourceVal !== null && typeof sourceVal === 'object' && !Array.isArray(sourceVal)) {
+            if (!target[key] || typeof target[key] !== 'object') {
+                target[key] = {};
+            }
+            deepMergeContent(target[key] as Record<string, unknown>, sourceVal as Record<string, unknown>);
+        } else {
+            target[key] = sourceVal;
+        }
+    }
+}
+```
+
+**File:** `src/services/ServiceUtilityHelper.ts`
+
+##### Step 2: Wire `onValuesChange` in AsyncPage.tsx
+
+Connect ProForm's `onValuesChange` to write changed values back to `parentContent`:
+
+```typescript
+import { deepMergeContent } from '@/services/ServiceUtilityHelper';
+
+// Inside AsyncPageComponent:
+const parentContent = pageMeta?.parentContent as Record<string, unknown> | undefined;
+
+const handleValuesChange = useCallback((changedValues: Record<string, unknown>) => {
+    if (!parentContent) return;
+    deepMergeContent(parentContent, changedValues);
+}, [parentContent]);
+
+// In JSX:
+<ProForm
+    formRef={formRef}
+    layout={labelLayout}
+    initialValues={initialValues}
+    onFinish={onFinish}
+    onValuesChange={handleValuesChange}
+    submitter={false}
+>
+```
+
+**File:** `src/components/page/AsyncPage.tsx`
+
+**Why this works:** ProForm fires `onValuesChange(changedValues, allValues)` on every field change. `changedValues` contains only the fields that changed, structured as nested objects matching the field's `namePath`. Recursively merging into `parentContent` keeps it in sync without needing to flatten paths.
+
+##### Step 3: Add static `setFieldValueWrapper` to InputFieldUnion
+
+For programmatic value changes (select callbacks, watch handler results, etc.) that need to set a field value outside of ProForm's normal change flow:
+
+```typescript
+// After the InputFieldUnion component definition:
+
+InputFieldUnion.setFieldValueWrapper = function(oSettings: {
+    fieldMeta?: FieldMeta;
+    fieldName?: string;
+    newValue: unknown;
+    parentContent?: Record<string, unknown>;
+    blockEvent?: boolean;
+    onInput?: (value: unknown) => void;
+}): void {
+    let fieldName = oSettings.fieldName;
+    if (!fieldName && oSettings.fieldMeta) {
+        fieldName = fetchFieldName(oSettings.fieldMeta);
+    }
+    if (!fieldName || !oSettings.parentContent) return;
+    setFieldValueWrapper({
+        vm: undefined,
+        fieldName,
+        newValue: oSettings.newValue,
+        parentContent: oSettings.parentContent,
+    });
+    if (!oSettings.blockEvent) {
+        oSettings.onInput?.(oSettings.newValue);
+    }
+};
+```
+
+**File:** `src/components/control/InputFieldUnion.tsx`
+
+**Note:** The `vm.$emit('input', newValue)` from legacy is replaced by the optional `onInput` callback. The `vm` parameter is no longer needed since `setFieldValueWrapper` already handles the case where `vm` is undefined (plain property assignment).
+
+#### Files Summary
+
+| File | Change |
+|------|--------|
+| `src/services/ServiceUtilityHelper.ts` | Add `deepMergeContent` utility function |
+| `src/components/page/AsyncPage.tsx` | Add `onValuesChange` handler using `deepMergeContent` |
+| `src/components/control/InputFieldUnion.tsx` | Add static `setFieldValueWrapper` method |
+
+#### Data Flow After Migration
+
+```
+User types in field
+  → ProForm internal state updates (normal AntD behavior)
+  → ProForm fires onValuesChange({fieldName: newValue})
+  → AsyncPage.handleValuesChange calls deepMergeContent(parentContent, changedValues)
+  → parentContent now has current value
+  → Next time watch handler fires, it reads current value from content parameter
+```
+
+For programmatic changes (e.g. select callback sets a related field):
+```
+Select callback fires
+  → InputFieldUnion.setFieldValueWrapper({ parentContent, fieldName, newValue })
+  → ServiceUtilityHelper.setFieldValueWrapper writes to parentContent
+  → Also need to call formRef.setFieldValue(namePath, newValue) to sync ProForm
+```
+
+#### Open Question for Implementation
+
+When `setFieldValueWrapper` is called programmatically (not from user input), the value is written to `parentContent` but ProForm won't know about it. We may also need to call `formRef.current?.setFieldValue(namePath, newValue)` to keep ProForm in sync. This requires passing `formRef` down or exposing a page-level `setFieldValue` API. This can be addressed in a follow-up step after the basic wiring works.
+
+#### Verification
+
+1. `npx tsc --noEmit` — no new TypeScript errors
+2. User edits a field → verify `parentContent` reflects the change (console.log in `handleValuesChange`)
+3. Watch handler that reads `content[fieldName]` → verify it sees current value, not initial value
+4. `grep -n "onValuesChange\|deepMergeContent" src/` — confirm wiring
+
+#### Update log — 2026-05-09
+
+- **Files modified** — `src/services/ServiceUtilityHelper.ts`: added `deepMergeContent` export function (with full explanatory comment block) and included it in the named-export object
+- **Files modified** — `src/components/page/AsyncPage.tsx`: imported `deepMergeContent`; added `parentContent` ref and `handleValuesChange` callback wired to ProForm `onValuesChange`
+- **Files modified** — `src/components/control/InputFieldUnion.tsx`: added `setFieldValueWrapper` import; added static `InputFieldUnion.setFieldValueWrapper` after the component export with `SetFieldValueWrapperStatic` type, blockEvent support, and explanatory comment
+
+### Update — compare-component skill (2026-05-09)
+
+- **Files modified** — `.claude/skills/compare-component/skill.md`: added Step 0 (resolve output file) — skill now scans all `.md` files under `docs/ComparasionComponents/` for the class name before writing; if found, updates the existing section in place (update mode); if not found, falls back to explicit arg or `InputFields.md` (append mode). Updated Step 4 to document both modes. Renamed default-output note in Input section.
+
+### Update — InputFieldUnion comparison doc (2026-05-09)
+
+- **Files modified** — `docs/ComparasionComponents/InputFieldUnion.md`: replaced the `InputFieldUnion` section (update mode — class was already documented). Reflects current state after today's migration: `setFieldValueWrapper` now ported as a static method (marked Different, not Not ported); `fetchFieldValueWrapper` truthy vs strict-undefined difference documented; `comSubFieldRefId` corrected to Exists in both (new TSX now has high-/low- prefix); added `resolvedLabel`/`namePath` as New only props; added `getFieldMeta`, `getFieldType`, `checkLowFlag`/`checkHighFlag`, `genSubFieldRefId` as Not ported / Different instance methods; removed stale "parentContent is read-only" TODO
+
+### Update — InputFieldUnion getFieldMeta migration (2026-05-10)
+
+- **Files modified** — `src/components/control/InputFieldUnion.tsx`: added `useImperativeHandle` to expose full `FieldHandle` on the component ref; `getFieldMeta` returns `props.fieldMeta` directly; all other handle methods (`getFieldName`, `postUpdate`, `loadMetaData`, `updateConfig`, `checkValidateSave`, `checkValidateSubmit`) delegate to `childRef` which holds the rendered child component ref
+- **Files modified** — `docs/ComparasionComponents/InputFieldUnion.md`: `getFieldMeta` row updated to Exists in both; `fetchFieldName` (instance) row removed — legacy instance method was never called (all callers used the static `InputFieldUnion.fetchFieldName`), qualifies as internal plumbing
+- **Files modified** — `.claude/skills/compare-component/skill.md`: added exclude rule for instance methods shadowed by a same-name static where the instance is never called in legacy (grep `vm.method` / `this.method` returns no results)
+
+### Update — InputFieldUnion valueCallback migration (2026-05-10)
+
+- **Files modified** — `src/components/control/InputFieldUnion.tsx`: `fieldValue` useMemo now checks `fieldMeta.settings.valueCallback` first and calls it when present, before falling back to `fetchObjValueByPath` — mirrors legacy `comFieldValue` getter
+- **Files modified** — `docs/ComparasionComponents/InputFieldUnion.md`: removed `comFieldValue` getter row (now equivalent); removed `valueCallback` TODO row; removed stale `getCoreInputField` TODO row (resolved by earlier `useImperativeHandle` migration)
+
+### Update — Resolved section pattern (2026-05-12)
+
+- **Files modified** — `docs/ComparasionComponents/InputFieldUnion.md`: added `### Resolved` section with strikethrough rows for `comFieldValue` setter, `valueCallback` getter, and `getFieldMeta()` — items confirmed fully covered, kept for traceability with short why-covered notes
+- **Files modified** — `.claude/skills/compare-component/skill.md`: added `Resolved` as a category in the output format (strikethrough table, one-sentence why-covered per row); added `~~Resolved~~` to status values; updated "Differences only" rule to direct confirmed-covered items to Resolved instead of silent deletion
+
+### Update — InputFieldUnion comparison refresh (2026-05-12)
+
+- **Files modified** — `docs/ComparasionComponents/InputFieldUnion.md`: full re-comparison against current source files; added `comFieldValue` getter row (Different — `fieldMeta.fieldValue` not checked in render path); added `clearValue` as Not ported (missing from `useImperativeHandle`); added two concrete TODOs for these gaps; preserved existing Resolved section
+
+### Update — InputFieldUnion clearValue migration (2026-05-12)
+
+- **Files modified** — `src/components/control/InputFieldUnion.tsx`: added `clearValue` delegation to `useImperativeHandle`
+- **Files modified** — `docs/ComparasionComponents/InputFieldUnion.md`: removed `clearValue` TODO; moved `clearValue` to Resolved section
+
+### Update — AbsInput comparison refresh (2026-05-12)
+
+- **Files modified** — `docs/ComparasionComponents/InputFields.md`: replaced `AbsInput` section (update mode). Previous version had stale/incorrect rows. Corrected entries: `checkValidateInput` was documented as "returns boolean" — fixed to "legacy returns `undefined` when no validation, new returns `[]`"; removed duplicate `Exists in both` rows for `comDisabledFlag`/`setValue`/`getValue` (identical behavior, exclude-listed). New entries: `addHandler` parameter order is **swapped** (`(handler, trigger)` in legacy/callers vs `(trigger, handler)` in new `useAbsInput`); `clearValue` `initValue` truthy vs strict-undefined check; `executeWatchHandlerList` missing `$http`; `getHandlerListByTrigger`/`setHandlerListByTrigger` as Legacy only (internalized into `addHandler`). `FieldHandle` missing `clearValue` gap documented. Removed stale `ChildFieldProps` row (that type was merged into `AbsInputProps`). Added `### Resolved` section for `checkHandlerEnable` (inlined into `executeWatchHandlerList`).
+
+### Update — InputField comparison refresh (2026-05-12)
+
+- **Files modified** — `docs/ComparasionComponents/InputFields.md`: replaced stale `InputField` section (update mode). Old section referenced removed concepts (`ChildFieldProps`, `outsideProForm`, legacy AbsInput fallback path) — all eliminated in the 2026-05-06 "Always use ProForm" refactor. New section documents two real differences: `disabled` (legacy HTML attribute) vs `readonly` (new ProFormText prop — different UX: focusable, value still submits); `initialValue` per-field on ProFormText vs reactive `v-model`. Also documents `clearValue` gap in `useImperativeHandle`.
+
+### Update — SelectField comparison refresh (2026-05-12)
+
+- **Files modified** — `docs/ComparasionComponents/InputFields.md`: replaced stale `Select2Field/SelectField` section (update mode). Removed stale rows referencing `ChildFieldProps`, `outsideProForm`, fallback `<select>` path, and `comSelectedId` (all removed/irrelevant after refactor). Corrected/added real differences: `getFieldKey()` does not check `settings.uuidField` — selects using a separate UUID key field will resolve wrong field; `checkFieldMetaConfig` exception→warning; `clearValue` also needs to clear `parentContent[fieldKey]` (not just fire `onInput`) — missing from `useImperativeHandle`; `loadMetaData` missing `fnSetInitKey`, `fnSetInitKeyForInvalid`, `formatMeta`, `formatMetaCallback`, `requestData`, `method`, `multiple`, `processEmptyCallback`; `loadModelMetaWrapper`/`excludeExist` not ported. Removed rows that were identical (renamed settings getter, getValue, updateConfig $nextTick→setTimeout — same logic).
