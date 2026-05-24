@@ -2393,3 +2393,171 @@ When `setFieldValueWrapper` is called programmatically (not from user input), th
 ### Update — SelectField comparison refresh (2026-05-12)
 
 - **Files modified** — `docs/ComparasionComponents/InputFields.md`: replaced stale `Select2Field/SelectField` section (update mode). Removed stale rows referencing `ChildFieldProps`, `outsideProForm`, fallback `<select>` path, and `comSelectedId` (all removed/irrelevant after refactor). Corrected/added real differences: `getFieldKey()` does not check `settings.uuidField` — selects using a separate UUID key field will resolve wrong field; `checkFieldMetaConfig` exception→warning; `clearValue` also needs to clear `parentContent[fieldKey]` (not just fire `onInput`) — missing from `useImperativeHandle`; `loadMetaData` missing `fnSetInitKey`, `fnSetInitKeyForInvalid`, `formatMeta`, `formatMetaCallback`, `requestData`, `method`, `multiple`, `processEmptyCallback`; `loadModelMetaWrapper`/`excludeExist` not ported. Removed rows that were identical (renamed settings getter, getValue, updateConfig $nextTick→setTimeout — same logic).
+
+### Update — loadTargetDocumentSelectList migration (2026-05-21)
+
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`: migrated `loadTargetDocumentSelectList()` from legacy Select2 stub to working Ant Select integration. Added `targetDocumentOptions` class property; method now populates it with the "NEW" option and sets `targetUUID`; wired `options` fallback in `getDefaultSectionMeta()` target document field settings so `SelectField` renders static options when `searchTargetDocMeta.url` is empty.
+
+### Update — Fix disabled fields rendering as plain text (2026-05-22)
+
+- **Files modified** — `src/components/control/SelectField.tsx`: changed `readonly={isDisabled}` to `fieldProps={{ disabled: isDisabled }}` — legacy `disabled` means greyed-out control (still visible as dropdown), not plain text render. ProFormSelect `readonly` renders as text only, which is incorrect.
+- **Files modified** — `src/components/control/InputField.tsx`: same fix — changed `readonly={isDisabled}` to `fieldProps={{ disabled: isDisabled }}` so disabled text fields render as greyed-out inputs, not plain text.
+
+### Update — Implement postLoadUrl mechanism in SelectField (2026-05-22)
+
+- **Files modified** — `src/components/control/SelectField.tsx`: added `useEffect` that implements the legacy `postLoadUrl` / `postLoadHandleModule` / `fnSetInitKey` chain. When a select field has both `postLoadUrl` and an initial UUID value (`uuid` or `initValue` in settings), it fetches the full document on mount and calls `postLoadHandleModule` with the result. This is the mechanism that populates `cache.srcDocument.id` and `cache.srcDocument.name` in the cross-creation flow — the legacy Select2 triggered this via the `select2:select` event when auto-selecting the initial value.
+
+### Update — Wire postUpdate/loadMetaData child-ref cascade (2026-05-22)
+
+- **Files modified** — `src/components/doc/SrcSelectInputUnion.ts`:
+  - Added `import type { FieldHandle }` from AbsInput
+  - Added `protected _coreUnionRef: FieldHandle | undefined` field (legacy: `vm.$refs.comRefCoreUnion`)
+  - Added `setCoreUnionRef(ref)` setter — called by React `ref=` callback in the JSX
+  - Replaced `postUpdate` and `loadMetaData` TODO stubs with real forwarding calls to `this._coreUnionRef`
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`:
+  - Added `import type { FieldHandle }` from AbsInput
+  - Added `protected _asyncEditUnionRef: FieldHandle | undefined` field (legacy: `vm.$refs.comRefAsyncEditUnion`)
+  - Added `setAsyncEditUnionRef(ref)` setter — called by React `ref=` callback in the JSX
+  - Replaced `postUpdate` and `loadMetaData` TODO stubs with real fan-out to `_srcSelectControl` and `_asyncEditUnionRef`
+  - Added `ref={(el) => srcSelect.setCoreUnionRef(el)}` to the source `<AsyncEditUnion>` JSX node
+  - Added `ref={(el) => instance.setAsyncEditUnionRef(el)}` to the target `<AsyncEditUnion>` JSX node
+
+### Update — Fix postUpdate timing so refs are live when called (2026-05-22)
+
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`: wrapped `this.postUpdate()` call in `initBatchSelectionTemplate` in `setTimeout(() => { this.postUpdate(); }, 0)`. Root cause: the call was synchronous but `open={!!instance}` + `destroyOnHidden` means React mounts `<AsyncEditUnion>` on the next render cycle, so `_coreUnionRef` / `_asyncEditUnionRef` were null when `postUpdate` fired. The component chain itself was complete — this was purely a `vm.$nextTick` vs synchronous call timing gap.
+
+### Update — Fix SelectField ignoring method/requestData for POST endpoints (2026-05-22)
+
+- **Files modified** — `src/services/ServiceUtilityHelper.ts`:
+  - Added `apiPost` import alongside `apiGet`
+  - Added `method?: string` and `requestData?: unknown` to `SelectMetaOptions` interface
+  - `loadMetaRequestForSelect` now dispatches to `apiPost(url, requestData)` when `method === 'post'`, falling back to `apiGet` for all other cases
+- **Files modified** — `src/components/control/SelectField.tsx`:
+  - `loadMetaData()` now forwards `settings['method']` and `settings['requestData']` into `SelectMetaOptions`
+  - `request` prop closure now forwards `method` and `requestData` from settings so the initial ProFormSelect render also uses the correct HTTP method
+- **Root cause**: `searchTargetDocMeta` for InboundDelivery target-doc selection sets `method: 'post'` with `requestData: { baseUUID, sourceDocType }`, but `loadMetaRequestForSelect` always called `apiGet`, causing a `GET` to `inboundDelivery/loadProperTargetDocListBatchGen` with no body — the backend expects a POST with the filter parameters.
+
+### Update — Fix missing double-nextTick nesting in initBatchSelectionTemplate (2026-05-22)
+
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`: corrected the Step 5 deferred block to match the legacy two-nested-`$nextTick` pattern (DocumentItemMultiSelect.js:378-388). Previously: `searchSrcDoc`, `initInputUnion`, `loadSrcDataWrapper` ran synchronously; only `postUpdate` was deferred (1 tick). Now: the outer `setTimeout` (tick 1) defers all of Step 5 so the modal DOM exists before `initInputUnion`/`loadSrcDataWrapper` run; the inner `setTimeout` (tick 2) defers `postUpdate` so the SrcSelectInputUnion child is fully rendered before refs are accessed.
+
+### Update — Fix stale sectionMeta snapshot causing empty source/target dropdowns (2026-05-23)
+
+- **Files modified** — `src/components/doc/SrcSelectInputUnion.ts`:
+  - Added `onConfigUpdate?: () => void` callback property (same pattern as `onSrcItemsLoaded` / `onModalClose`)
+  - `initInputUnionTemplate`: added `this.getSectionMeta()` + `this.onConfigUpdate?.()` after `initCopyBasicConfig()` — re-builds `meta.sectionMeta` with live `searchSrcDocMeta` / `cache` values, then notifies React to re-render
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`:
+  - Added `onConfigUpdate?: () => void` callback property
+  - `useEffect([instance])`: wired `instance.onConfigUpdate` and `srcSelect.onConfigUpdate` to `forceUpdate` so React re-renders when sectionMeta is refreshed
+  - `initBatchSelectionTemplate` tick-1 block: added `this.getSectionMeta()` + `this.onConfigUpdate?.()` after `srcSelect.initInputUnion()` — refreshes target section meta with live `searchTargetDocMeta` / `targetUUID`, then triggers re-render
+- **Root cause**: `getDefaultSectionMeta()` snapshots `this.searchSrcDocMeta.url` etc. as plain values at call time. Constructor calls it before any config arrives (empty URL). `initCopyBasicConfig` later populates the real values but nothing re-ran `getDefaultSectionMeta()`. Vue 2 handled this automatically via reactive `$set`; the TS class requires an explicit re-build + forceUpdate.
+
+---
+
+### C15 — `forceUpdate`: React Re-render Bridge for Class Instance Mutations (2026-05-24)
+
+#### Question
+
+What does `const [, forceUpdate] = useState(0)` mean? Why does calling `forceUpdate(n => n + 1)` trigger a UI re-render even though nothing in the JSX uses that counter value? And what is `onConfigUpdate?: () => void` — is it a standard React event handler?
+
+#### Answer
+
+**`forceUpdate` — manual re-render trigger**
+
+```ts
+const [, forceUpdate] = useState(0);
+```
+
+`useState(0)` gives you a counter state. The value is thrown away (the `,` skips it). Only the setter is kept, renamed `forceUpdate`.
+
+This is a deliberate React pattern for forcing re-renders when you hold mutable class instances that React cannot observe. The full chain:
+
+```
+class mutates its own data
+  → calls this.onConfigUpdate?.()
+    → React layer runs: forceUpdate(n => n + 1)
+      → React sees state changed
+        → re-renders DocumentItemMultiSelectModal
+          → component reads fresh data from instance
+            → UI updates
+```
+
+React's reactivity only tracks **state and props**. Mutating `instance.someField` alone is invisible to React — `forceUpdate` is the bridge.
+
+**Why `n => n + 1` and not `forceUpdate(1)`?**
+
+React bails out if the new state value is identical to the current one (`Object.is` comparison):
+
+```ts
+forceUpdate(1)  // first call: 0 → 1, re-renders ✓
+forceUpdate(1)  // second call: still 1 — React skips, NO re-render ✗
+```
+
+The functional form `n => n + 1` reads the current value and increments it, guaranteeing the value always changes, so React never skips.
+
+**`onConfigUpdate?: () => void` — callback property, not a React event handler**
+
+This is a plain optional callback property on the `DocumentItemMultiSelect` class. It is **not** a standard React event. The pattern replaces Vue's `this.$emit('configUpdate')`:
+
+- The class exposes a slot: `onConfigUpdate?: () => void`
+- The React layer plugs in the re-render logic from outside (in `useEffect`): `instance.onConfigUpdate = () => forceUpdate(n => n + 1)`
+- When the class needs to notify React of a state change, it calls `this.onConfigUpdate?.()`
+- The class itself has no implementation — the caller decides what happens
+
+This keeps the business logic class (`DocumentItemMultiSelect`) free of any React API knowledge.
+
+#### Key file
+- `DocumentItemMultiSelect.tsx:1283` — `forceUpdate` definition with full explanatory comment
+
+---
+
+### Topic — How to refresh SelectField options after config changes (pattern reference)
+
+**Problem**: `getDefaultSectionMeta()` snapshots `this.searchSrcDocMeta.url` and other config values as plain JS values at call time. The constructor calls it before any runtime config arrives, so the URL is empty. In Vue 2 this was invisible — `vm.$set` triggered reactivity that auto-re-ran the method. In the plain TS class there is no reactivity.
+
+**Pattern to follow** whenever a TS class method needs to push new config into mounted SelectField components:
+
+```
+1. Update class properties (e.g. searchSrcDocMeta.url via initCopyBasicConfig)
+2. Call getSectionMeta()          → rebuilds meta.sectionMeta with fresh values
+3. Call this.onConfigUpdate?.()   → triggers forceUpdate() in React
+   React re-renders JSX → reads fresh meta.sectionMeta → passes new fieldMeta props down:
+   AsyncEditUnion → AsyncField → InputFieldUnion → SelectField
+   AbsInput useEffect([fieldMeta]) fires → meta.settings updated with real URL
+4. postUpdate() [deferred tick]   → loadMetaData() → fetches options with correct URL
+```
+
+**Key files**:
+- `onConfigUpdate` callback: declared on `DocumentItemMultiSelect` and `SrcSelectInputUnion`, wired to `forceUpdate` in `DocItemSelectionModal` `useEffect([instance])`
+- `AbsInput.tsx:145` — the `useEffect([fieldMeta])` that syncs new prop into internal settings state
+- `SelectField.tsx` — `loadMetaData()` reads `settings['getMetaDataUrl']` which only has the correct value after step 3 above
+
+### Update — Change DocumentItemMultiSelect field layout to 2 per row (2026-05-24)
+
+- **Files modified** — `src/components/control/AsyncField.tsx`: added `colClass` to destructured props; added `flexBasis` resolver that maps Bootstrap `col-md-*` classes to flex percentages (`col-md-6`→50%, `col-md-4`→33.3%, `col-md-3`→25%, default→50%); replaced hardcoded `calc(33.333% - 11px)` with dynamic `flexBasis` in both visible fields and ref control field wrappers.
+- **Files modified** — `src/components/doc/SrcSelectInputUnion.ts`: changed `colClass: 'col-md-3'` → `'col-md-6'` to match legacy.
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`: changed `colClass: 'col-md-3'` → `'col-md-6'` to match legacy.
+
+### Update — Fix .html suffix on API URLs (2026-05-24)
+
+- **Files modified** — `/Users/I043125/work2/IntelligentUI/src/services/ServiceUtilityHelper.ts`: removed `.html` suffix appending logic from `genSimpleLoadDataUrlByKey()` — the legacy pattern (Spring MVC `.html` suffix mapping) is not used in Spring Boot 3.2.
+
+### Update — Fix 500 transaction error on purchaseContract/searchModuleService (2026-05-24)
+
+- **Files modified** — `/Users/I043125/work2/IntelligentPlatform/src/main/java/com/company/IntelligentPlatform/logistics/dto/PurchaseContractListController.java`: added `@Transactional` annotation (Spring's `org.springframework.transaction.annotation.Transactional`) at class level to ensure Hibernate lazy-loading works within request scope.
+
+### Update — Centralize forceUpdateUI into getSectionMetaWrapper (2026-05-24)
+
+- **Files modified** — `src/components/doc/DocumentItemMultiSelect.tsx`: renamed `onConfigUpdate` → `forceUpdateUI`; added `vm.forceUpdateUI?.()` call at end of static `getSectionMetaWrapper`; removed manual `this.onConfigUpdate?.()` call in `initBatchSelectionTemplate`; simplified React modal useEffect wiring to single shared `forceUpdateFn`.
+- **Files modified** — `src/components/doc/SrcSelectInputUnion.ts`: renamed `onConfigUpdate` → `forceUpdateUI`; removed manual `this.onConfigUpdate?.()` call in `initInputUnion`.
+
+### Update — Add getPageMeta() + ServicePageMetaProxy + custom page meta merge (2026-05-24)
+
+- **Files created** — `src/services/ServicePageMetaProxy.ts`: ported `mergePageMeta`, `mergeSectionMeta`, `mergeMetaTemplate` from legacy `ServiceUiController.js:3256-3365`. Merges backend-provided custom page metadata with default page metadata by tab/section/field key matching.
+- **Files modified** — `src/controllers/ServiceBaseController.ts`: added `meta` property, `forceUpdateUI` callback, `getPageMeta()` (main lifecycle wrapper), `getPageId()` (override hook), `setCustomPageMetaWrapper()` (async fetch + merge), `getCustomPageMeta()` (HTTP GET to `/api/serExtendPageSetting/loadModuleViewById`). Also added base `getDefaultPageMeta()` returning `null`.
+- **Files modified** — `src/controllers/ServiceEditController.ts`: changed `buildAsyncPageMeta()` to call `this.getPageMeta()` instead of `this.getDefaultPageMeta()` directly, so page meta goes through the full lifecycle (assign + custom merge + forceUpdateUI).
+
+### Update — Make getDefaultPageMeta abstract at ServiceBaseController (2026-05-25)
+
+- **Files modified** — `src/controllers/ServiceBaseController.ts`: changed `protected getDefaultPageMeta(): unknown { return null; }` → `protected abstract getDefaultPageMeta(): unknown` — enforces implementation across the entire controller hierarchy.
+- **Files modified** — `src/controllers/ServiceEditController.ts`: re-added `protected abstract getDefaultPageMeta(): PageMeta` as a type-narrowing override (return type `PageMeta` instead of `unknown`), so call sites within the editor base class are correctly typed. Previously this was the only abstract declaration; now it narrows the base-class contract rather than defining it.
