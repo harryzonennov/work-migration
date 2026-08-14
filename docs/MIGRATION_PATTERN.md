@@ -144,6 +144,7 @@ Step 11 — Self-check against Output File Checklist above
 | Creating API file but leaving stubs | All 6 core API functions must call real endpoints, not `console.log` |
 | Merging item fields into header type | `[Entity]UIModel` ≠ `[Entity]ItemUIModel` — keep separate |
 | Using string status in `valueEnum` | Use integer codes: `{ 1: 'Initial' }` not `{ INITIAL: 'Initial' }` |
+| Clearing the `loading` gate before all edit state is set | Record + item list (`dataSource`) + `actionCodeList` must ALL be populated before `loading` flips to false — see §7 |
 
 ---
 
@@ -179,3 +180,42 @@ These were decided during the PurchaseContract case and apply to all modules:
 6. **Pessimistic locking** — `loadModuleEditService` acquires a lock. `exitEditor` must be called on unmount. `loadModuleViewService` is read-only (no lock).
 
 7. **i18n namespace per module** — `[Entity]Manager.ts` calls `i18n.addResourceBundle()` on import. Foundation namespaces (`commonElements`, `docActionNode`, `docInvolveParty`, `docFlowNode`, `docMatItem`) are shared and already registered.
+
+---
+
+## 7. Known Constraint — the `loading` gate must be atomic (revisit later)
+
+**Status: documented gotcha, not yet a framework-enforced guarantee. A cleaner solution can be designed later; for now every edit hook must follow the rule below.**
+
+### The rule
+In an edit-page hook, the `loading` flag must NOT flip to `false` until **all** the state the page reads on its first non-loading render is populated. For the root-document editor that is three pieces set together:
+
+- `record` — the document header (drives ProForm `initialValues`)
+- `dataSource` — the **list of material line-items** (drives the `EditableProTable` items grid)
+- `actionCodeList` — the valid workflow actions (drives `ProcessButtonArray` / `WorkflowToolbar`)
+
+### Why (the ProForm "mount once" constraint)
+`PurchaseContractEditPage.tsx:134-135` only calls `controller.buildAsyncPageMeta()` / `buildInitialValues()` when `!loading`. Ant Design `ProForm` applies `initialValues` **exactly once, on mount**; the editable items table and the action buttons likewise read their inputs on that first non-loading render. There is no second chance — if the page mounts against partial/empty state, the late-arriving pieces are never picked up and no re-render fixes it.
+
+### The failure mode if violated
+If `loading` cleared right after the record loads and `dataSource` / `actionCodeList` were set afterward:
+- the contract's **material line-items grid renders empty** even though the contract has items (the table read `dataSource` while it was still `[]`);
+- the **workflow buttons are missing** (`ProcessButtonArray` read an empty `actionCodeList`).
+
+### Current mitigation
+`src/composables/useServiceEntityEditController.ts` runs `Promise.all([fetchRecord, loadExtra])` and sets everything **inside the same `.then`, before `.finally` clears `loading`**:
+```ts
+Promise.all([config.fetchRecord(uuid), config.loadExtra ? config.loadExtra() : Promise.resolve(undefined)])
+  .then(([fetched, extra]) => {
+    setRecord(select(fetched));           // header
+    config.onLoaded?.(record, extra);      // wrapper sets dataSource (line-items) + actionCodeList HERE
+  })
+  .finally(() => setLoading(false));       // only AFTER all three are queued
+```
+The document wrapper (`useDocumentEditController`) sets `dataSource` (via `extractItems`) and `actionCodeList` inside `onLoaded`, so React batches all three state updates before `loading` becomes false.
+
+### Why it's fragile / worth revisiting
+The atomicity is a *convention* enforced by hand in each hook, not by the framework. A future refactor could make it structural — e.g. the core computes `loading` as "all required async slots resolved" rather than a manually-cleared boolean, or the page reads a single assembled view-model instead of separate `record` / `dataSource` / `actionCodeList` states. Decide the proper solution later; until then, do not clear `loading` until every read-on-mount slot is set.
+
+Related: §5 "Material items NOT in `content`" — line items live in `dataSource`, separate from `record`, which is exactly why they can lag and must be included in the atomic set.
+
