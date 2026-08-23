@@ -2,8 +2,15 @@
   "permissions": {
     "allow": [
       "Read(**)",
+      "Read(/Users/I043125/work/**)",
+      "Read(/Users/I043125/work2/**)",
+      "Read(/Users/I043125/work-migration/**)",
       "Write(**)",
+      "Write(/Users/I043125/work2/**)",
+      "Write(/Users/I043125/work-migration/**)",
       "Edit(**)",
+      "Edit(/Users/I043125/work2/**)",
+      "Edit(/Users/I043125/work-migration/**)",
       "Glob(**)",
       "Grep(**)",
       "Bash(find:*)",
@@ -29,7 +36,9 @@
       "Bash(touch:*)",
       "Bash(diff:*)",
       "Bash(tsc:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Skill(update-config)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

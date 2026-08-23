@@ -10008,3 +10008,91 @@ called `loadMetaRequest({ url })` with no field mapping, so `.text` and `.id` re
 - `LogonUserMessageManager`, `LogonUserMessageCategory`, `IUserMessageProcessHandler` all ported
 
 **Plan**: `docs/plan-topbar-system-messages.md` — 6-step plan covering types, API, component, navigation source mapping, MainLayout wiring, and i18n labels
+
+---
+
+### Update — Login page with realLogin switch (2026-08-14)
+
+#### Files modified
+- `src/api/apiClient.ts` — added `loginWithCredentials()`, `clearSession()`, `isSessionEstablished()`, `NotLoggedInError`; `ensureLoggedIn()` now checks `realLogin` flag: when `true` throws `NotLoggedInError` if no session, when `false` auto-logs in with hardcoded credentials
+- `src/router/index.tsx` — added `/login` route (outside `MainLayout`); wrapped `MainLayout` with `<AuthGuard>`
+
+#### Files created
+- `src/pages/auth/LoginPage.tsx` — login form using Ant Design `Form` + `Input` + `Input.Password`; calls `loginWithCredentials()` from `apiClient`; navigates to `/` on success; shows `Alert` on error
+- `src/components/AuthGuard.tsx` — route guard; when `realLogin=true` checks `isSessionEstablished()`; redirects to `/login` if no session; no-op when `realLogin=false`
+- `docs/LOGIN_CONFIGURATION_GUIDE.md` (in IntelligentUI project) — end-user guide explaining the `realLogin` switch, where to find it, how to toggle modes, and how to create `localConfig.local.ts` from the example template
+
+### Update — Rename getAttachmentConfig → getDocAttachmentConfig (2026-08-21)
+
+#### Files modified
+- `src/services/logistics/WarehouseStoreManager.ts` — renamed `getAttachmentConfig` → `getDocAttachmentConfig`
+- `src/services/logistics/PurchaseContractManager.ts` — same rename
+- `src/services/logistics/PurchaseRequestManager.ts` — same rename
+- `src/services/logistics/InquiryManager.ts` — same rename
+- `src/services/platform/MaterialManager.ts` — same rename
+- `src/pages/platform/material/MaterialUnitController.tsx` — updated call site
+- `src/pages/platform/material/MaterialEditController.tsx` — updated call site
+- `src/pages/logistics/warehouseStore/InquiryEditController.tsx` — updated call site
+- `src/pages/logistics/warehouseStore/InquiryMaterialItemController.tsx` — updated call site
+- `src/pages/logistics/inquiry/InquiryEditController.tsx` — updated call site
+- `src/pages/logistics/inquiry/InquiryMaterialItemController.tsx` — updated call site
+- `src/pages/logistics/purchaseRequest/PurchaseRequestEditController.tsx` — updated call site
+- `src/pages/logistics/purchaseRequest/PurchaseRequestMaterialItemController.tsx` — updated call site
+- `src/pages/logistics/purchaseContract/PurchaseContractEditController.tsx` — updated call site and comments
+- `src/pages/logistics/purchaseContract/PurchaseContractMaterialItemController.tsx` — updated call site
+- `src/components/page/AsyncAttachmentSection.tsx` — updated dynamic call and comments
+- `src/api/attachmentApi.ts` — updated JSDoc reference
+- `src/types/logistics/AttachmentUIModel.ts` — updated JSDoc reference
+
+### Update — Consolidate getDocAttachmentConfig into ServiceManager base class (2026-08-21)
+
+#### Files modified
+- `src/services/ServiceManager.ts` — added default `static getDocAttachmentConfig(): AttachmentEndpointConfig` that derives all URLs from `getRootNodeInstId()`; added import for `AttachmentEndpointConfig`
+- `src/services/logistics/InquiryManager.ts` — removed now-redundant `getDocAttachmentConfig()` override
+- `src/services/logistics/WarehouseStoreManager.ts` — removed now-redundant `getDocAttachmentConfig()` override
+- `src/services/logistics/PurchaseRequestManager.ts` — removed now-redundant `getDocAttachmentConfig()` override
+- `src/services/logistics/PurchaseContractManager.ts` — removed now-redundant `getDocAttachmentConfig()` override
+- `src/services/platform/MaterialManager.ts` — removed now-redundant `getDocAttachmentConfig()` override
+
+### Update — Consolidate getLoadDocItemBaseURL, getDocActionConfigureList, executeDocAction into ServiceManager (2026-08-21)
+
+#### Files modified
+- `src/services/ServiceManager.ts` — added default `getLoadDocItemBaseURL()` (uses `getItemNodeInstId()`), `getDocActionConfigureList()`, and `executeDocAction()` implementations; added import for `docActionApi`
+- `src/services/logistics/InquiryManager.ts` — removed redundant overrides of all three methods; removed unused `docActionApi` import
+- `src/services/logistics/WarehouseStoreManager.ts` — same
+- `src/services/logistics/PurchaseRequestManager.ts` — same
+- `src/services/logistics/PurchaseContractManager.ts` — same
+- `src/services/platform/MaterialManager.ts` — same
+
+### Update — Dead code cleanup: StatusTag, DocStatusTag, consolidate ServiceManager helpers (2026-08-22)
+
+#### Files deleted
+- `src/components/StatusTag.tsx` — never imported anywhere; hard-coded to `ContractStatus` and `purchaseContract` i18n namespace
+- `src/components/doc/DocStatusTag.tsx` — never imported anywhere; same coupling problem as StatusTag
+
+#### Files modified
+- `src/services/ServiceManager.ts` — added `formatStatus()` default implementation using `this.getStatusIconArray()`; added `formatSelectWithIcon` import; changed `getItemStatusIconArray()` default from `[]` to `this.getStatusIconArray()`
+- `src/services/logistics/PurchaseRequestManager.ts` — removed redundant `formatStatusIconClass`, `formatStatus` overrides; removed unused `formatSelectWithIcon` import
+- `src/services/logistics/InquiryManager.ts` — same
+- `src/services/logistics/WarehouseStoreManager.ts` — same
+- `src/services/logistics/PurchaseContractManager.ts` — removed redundant `formatStatusIconClass` override
+- `src/services/platform/MaterialManager.ts` — removed redundant `formatStatusIconClass`, `formatStatus` overrides; removed unused `formatSelectWithIcon` import
+- `test/pages/logistics/purchaseContract/purchaseContractEditPage.test.tsx` — removed dead `DocStatusTag` mock (component deleted, testid never queried)
+
+
+### Update — PageModuleCopier migration tool (2026-08-23)
+
+#### Files created
+- `migrationTools/PageModuleCopier.java` — standalone Java utility that copies a logistics page module (currently hardcoded to `inquiry`) into a new target folder, renaming files and replacing all `Inquiry`/`inquiry`/`InquiryMaterialItem`/`inquiryMaterialItem` tokens with the supplied `rootNodeInstId` / `itemNodeInstId` values; `itemNodeInstId` is optional (null = skip item-tier files); `main()` runs with `inboundDelivery` / `inboundItem` / `logistics`
+
+#### Files created (output — first run)
+- `src/pages/logistics/inboundDelivery/InboundDeliveryEditController.tsx`
+- `src/pages/logistics/inboundDelivery/InboundDeliveryEditPage.tsx`
+- `src/pages/logistics/inboundDelivery/InboundDeliveryListController.tsx`
+- `src/pages/logistics/inboundDelivery/InboundDeliveryListPage.tsx`
+- `src/pages/logistics/inboundDelivery/InboundItemController.tsx`
+- `src/pages/logistics/inboundDelivery/InboundItemEditPage.tsx`
+- `src/pages/logistics/inboundDelivery/InboundItemPanel.tsx`
+- `src/pages/logistics/inboundDelivery/useInboundDeliveryEditController.ts`
+- `src/pages/logistics/inboundDelivery/useInboundDeliveryListController.ts`
+- `src/pages/logistics/inboundDelivery/useInboundItemController.ts`

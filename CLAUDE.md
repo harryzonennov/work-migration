@@ -74,6 +74,15 @@ When porting: open the legacy JS, go top to bottom, port every member. Don't ski
 
 ---
 
+## New UI Code Rules
+
+### Variable naming
+- Name local variables after their **type**, with a lowercase first letter: `selectMetaOptions` not `metaOpts`, `fieldMeta` not `fm`, `settings` not `s`.
+- Exception: when two variables of the same type exist in the same scope, add a distinguishing qualifier prefix (e.g. `srcFieldMeta` / `targetFieldMeta`).
+- This applies to all new code and to code being touched during migration — opportunistically rename when editing a block.
+
+---
+
 ## After-Update Summary Rule
 
 After completing any task that modifies, creates, or deletes files, you MUST append a summary
