@@ -17,9 +17,47 @@ public class I18nCopier {
 
     static final String[] LANGUAGES = {"en", "zh"};
 
+    static final String RefDocRootNodeInstId = "inquiry";
+
+    static final String RefDocItemNodeInstId = "inquiryMaterialItem";
+
+    static final String RefDocPath = "supplyChain";
+
+    static final String RefDummyDocRootNodeInstId = "material";
+
+    static final String RefDummyDocItemNodeInstId = "materialUnit";
+
+    static final String RefDummyDocPath = "coreFunction";
+
+    static final String RefSERootNodeInstId = "standardMaterialUnit";
+
+    static final String RefSEPath = "coreFunction";
+
+    static class RefConfig {
+        final String refRootNodeInstId;
+        final String refItemNodeInstId;
+        final String refPath;
+        RefConfig(String refRootNodeInstId, String refItemNodeInstId, String refPath) {
+            this.refRootNodeInstId = refRootNodeInstId;
+            this.refItemNodeInstId = refItemNodeInstId;
+            this.refPath = refPath;
+        }
+    }
+
+    static RefConfig resolveRef(int modelCategory) {
+        if (modelCategory == MigrationEntrance.MODEL_CAT_DUMMY_DOCUMENT)
+            return new RefConfig(RefDummyDocRootNodeInstId, RefDummyDocItemNodeInstId, RefDummyDocPath);
+        if (modelCategory == MigrationEntrance.MODEL_CAT_SER_ENTITY)
+            return new RefConfig(RefSERootNodeInstId, null, RefSEPath);
+        return new RefConfig(RefDocRootNodeInstId, RefDocItemNodeInstId, RefDocPath);
+    }
+
     public static void mainEntry(String rootNodeInstId,
                                  String itemNodeInstId,
-                                 String groupId) throws IOException {
+                                 String groupId,
+                                 int modelCategory) throws IOException {
+
+        RefConfig ref = resolveRef(modelCategory);
 
         String rootPascal = toPascal(rootNodeInstId);
         String rootCamel  = toCamel(rootNodeInstId);
@@ -27,7 +65,7 @@ public class I18nCopier {
         String itemCamel  = itemNodeInstId != null ? toCamel(itemNodeInstId)  : null;
 
         for (String lang : LANGUAGES) {
-            Path sourceFile = Paths.get(INTELLIGENT_UI_I18N, lang, "supplyChain", "Inquiry.json");
+            Path sourceFile = Paths.get(INTELLIGENT_UI_I18N, lang, ref.refPath, toPascal(ref.refRootNodeInstId) + ".json");
             Path targetDir  = Paths.get(INTELLIGENT_UI_I18N, lang, groupId);
 
             if (!Files.exists(sourceFile)) {
@@ -44,25 +82,26 @@ public class I18nCopier {
                 continue;
             }
             String content = Files.readString(sourceFile, StandardCharsets.UTF_8);
-            String newContent = replaceContent(content, rootPascal, rootCamel,
+            String newContent = replaceContent(content, ref, rootPascal, rootCamel,
                     itemPascal, itemCamel, itemNodeInstId != null);
 
             Files.writeString(targetFile, newContent, StandardCharsets.UTF_8);
-            System.out.println("Copied: " + lang + "/supplyChain/Inquiry.json → "
+            System.out.println("Copied: " + lang + "/" + ref.refPath + "/" + toPascal(ref.refRootNodeInstId) + ".json → "
                     + lang + "/" + groupId + "/" + newFileName);
         }
     }
 
     static String replaceContent(String content,
+                                  RefConfig ref,
                                   String rootPascal, String rootCamel,
                                   String itemPascal, String itemCamel,
                                   boolean hasItem) {
-        if (hasItem) {
-            content = content.replace("InquiryMaterialItem", itemPascal);
-            content = content.replace("inquiryMaterialItem", itemCamel);
+        if (hasItem && ref.refItemNodeInstId != null) {
+            content = content.replace(toPascal(ref.refItemNodeInstId), itemPascal);
+            content = content.replace(ref.refItemNodeInstId, itemCamel);
         }
-        content = content.replace("Inquiry", rootPascal);
-        content = content.replace("inquiry", rootCamel);
+        content = content.replace(toPascal(ref.refRootNodeInstId), rootPascal);
+        content = content.replace(ref.refRootNodeInstId, rootCamel);
         return content;
     }
 

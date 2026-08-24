@@ -24,14 +24,47 @@ public class PageModuleCopier {
     static final String INTELLIGENT_UI_SRC =
             "/Users/I043125/work2/IntelligentUI/src/pages/";
 
-    // ── main ───────────────────────────────────────────────────────────────
-    public static void main(String[] args) throws IOException {
-        mainEntry("inboundDelivery", "inboundItem", "logistics");
+    static final String RefDocRootNodeInstId = "inquiry";
+
+    static final String RefDocItemNodeInstId = "inquiryMaterialItem";
+
+    static final String RefDocPath = "logistics";
+
+    static final String RefDummyDocRootNodeInstId = "material";
+
+    static final String RefDummyDocItemNodeInstId = "materialUnit";
+
+    static final String RefDummyDocPath = "platform";
+
+    static final String RefSERootNodeInstId = "standardMaterialUnit";
+
+    static final String RefSEPath = "platform";
+
+    static class RefConfig {
+        final String refRootNodeInstId;
+        final String refItemNodeInstId;
+        final String refPath;
+        RefConfig(String refRootNodeInstId, String refItemNodeInstId, String refPath) {
+            this.refRootNodeInstId = refRootNodeInstId;
+            this.refItemNodeInstId = refItemNodeInstId;
+            this.refPath = refPath;
+        }
+    }
+
+    static RefConfig resolveRef(int modelCategory) {
+        if (modelCategory == MigrationEntrance.MODEL_CAT_DUMMY_DOCUMENT)
+            return new RefConfig(RefDummyDocRootNodeInstId, RefDummyDocItemNodeInstId, RefDummyDocPath);
+        if (modelCategory == MigrationEntrance.MODEL_CAT_SER_ENTITY)
+            return new RefConfig(RefSERootNodeInstId, null, RefSEPath);
+        return new RefConfig(RefDocRootNodeInstId, RefDocItemNodeInstId, RefDocPath);
     }
 
     public static void mainEntry(String rootNodeInstId,
                                  String itemNodeInstId,
-                                 String groupId) throws IOException {
+                                 String groupId,
+                                 int modelCategory) throws IOException {
+
+        RefConfig ref = resolveRef(modelCategory);
 
         // ── derive pascal / camel variants ─────────────────────────────────
         String rootPascal = toPascal(rootNodeInstId);   // e.g. InboundDelivery
@@ -41,7 +74,7 @@ public class PageModuleCopier {
         String itemCamel  = itemNodeInstId != null ? toCamel(itemNodeInstId)  : null;
 
         // ── source / target dirs ───────────────────────────────────────────
-        Path sourceDir = Paths.get(INTELLIGENT_UI_SRC, "logistics", "inquiry");
+        Path sourceDir = Paths.get(INTELLIGENT_UI_SRC, ref.refPath, ref.refRootNodeInstId);
         Path targetDir = Paths.get(INTELLIGENT_UI_SRC, groupId, rootCamel);
 
         if (!Files.exists(sourceDir)) {
@@ -55,7 +88,7 @@ public class PageModuleCopier {
                 if (!Files.isRegularFile(srcFile)) continue;
 
                 String originalName = srcFile.getFileName().toString();
-                String newName = renameFile(originalName, rootPascal, rootCamel,
+                String newName = renameFile(originalName, ref, rootPascal,
                         itemPascal, itemCamel, itemNodeInstId != null);
 
                 if (newName == null) {
@@ -70,7 +103,7 @@ public class PageModuleCopier {
                     continue;
                 }
                 String content = Files.readString(srcFile, StandardCharsets.UTF_8);
-                String newContent = replaceContent(content, rootPascal, rootCamel,
+                String newContent = replaceContent(content, ref, rootPascal, rootCamel,
                         itemPascal, itemCamel, itemNodeInstId != null);
 
                 Files.writeString(targetFile, newContent, StandardCharsets.UTF_8);
@@ -88,44 +121,49 @@ public class PageModuleCopier {
      * (belongs to item tier and itemNodeInstId is null).
      */
     static String renameFile(String name,
-                              String rootPascal, String rootCamel,
+                              RefConfig ref,
+                              String rootPascal,
                               String itemPascal, String itemCamel,
                               boolean hasItem) {
-        // hook files: useInquiryMaterialItem* / useInquiry*
-        if (name.startsWith("useInquiryMaterialItem")) {
-            if (!hasItem) return null;
-            return "use" + itemPascal + name.substring("useInquiryMaterialItem".length());
+        String refItemPascal = ref.refItemNodeInstId != null ? toPascal(ref.refItemNodeInstId) : null;
+        String refRootPascal = toPascal(ref.refRootNodeInstId);
+        String useRefRoot = "use" + refRootPascal;
+
+        if (refItemPascal != null) {
+            String useRefItem = "use" + refItemPascal;
+            if (name.startsWith(useRefItem)) {
+                if (!hasItem) return null;
+                return "use" + itemPascal + name.substring(useRefItem.length());
+            }
         }
-        if (name.startsWith("useInquiry")) {
-            return "use" + rootPascal + name.substring("useInquiry".length());
+        if (name.startsWith(useRefRoot)) {
+            return "use" + rootPascal + name.substring(useRefRoot.length());
         }
 
-        // class files: InquiryMaterialItem* / Inquiry*
-        if (name.startsWith("InquiryMaterialItem")) {
+        if (refItemPascal != null && name.startsWith(refItemPascal)) {
             if (!hasItem) return null;
-            return itemPascal + name.substring("InquiryMaterialItem".length());
+            return itemPascal + name.substring(refItemPascal.length());
         }
-        if (name.startsWith("Inquiry")) {
-            return rootPascal + name.substring("Inquiry".length());
+        if (name.startsWith(refRootPascal)) {
+            return rootPascal + name.substring(refRootPascal.length());
         }
 
-        // file doesn't match any known prefix — copy as-is
         return name;
     }
 
     // ── content replacement ────────────────────────────────────────────────
 
     static String replaceContent(String content,
+                                  RefConfig ref,
                                   String rootPascal, String rootCamel,
                                   String itemPascal, String itemCamel,
                                   boolean hasItem) {
-        // longest tokens first to avoid partial replacement
-        if (hasItem) {
-            content = content.replace("InquiryMaterialItem", itemPascal);
-            content = content.replace("inquiryMaterialItem", itemCamel);
+        if (hasItem && ref.refItemNodeInstId != null) {
+            content = content.replace(toPascal(ref.refItemNodeInstId), itemPascal);
+            content = content.replace(ref.refItemNodeInstId, itemCamel);
         }
-        content = content.replace("Inquiry", rootPascal);
-        content = content.replace("inquiry", rootCamel);
+        content = content.replace(toPascal(ref.refRootNodeInstId), rootPascal);
+        content = content.replace(ref.refRootNodeInstId, rootCamel);
         return content;
     }
 
