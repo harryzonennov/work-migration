@@ -52,6 +52,10 @@ public class I18nCopier {
         return new RefConfig(RefDocRootNodeInstId, RefDocItemNodeInstId, RefDocPath);
     }
 
+    public static void mainEntry(CopierParams params) throws IOException {
+        mainEntry(params.rootNodeInstId, params.itemNodeInstId, params.groupId, params.modelCategory);
+    }
+
     public static void mainEntry(String rootNodeInstId,
                                  String itemNodeInstId,
                                  String groupId,

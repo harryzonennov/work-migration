@@ -114,6 +114,11 @@ public class PageModuleCopier {
         System.out.println("\nDone. Output: " + targetDir);
     }
 
+    public static void mainEntry(CopierParams params) throws IOException {
+        mainEntry(params.rootNodeInstId, params.itemNodeInstId, params.groupId, params.modelCategory);
+        ListControllerMigrator.migrate(params);
+    }
+
     // ── file rename ────────────────────────────────────────────────────────
 
     /**

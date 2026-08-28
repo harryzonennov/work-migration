@@ -10,18 +10,23 @@ public class MigrationEntrance {
 
 
     public static void main(String[] args) throws Exception {
-        String rootNodeInstId = "outboundDelivery";
-        String itemNodeInstId = "outboundItem";
-        String groupId        = "logistics";
+        CopierParams params = new CopierParams(
+                "purchaseReturnOrder",
+                "outboundItem",
+                "logistics",
+                MODEL_CAT_DOCUMENT,
+                "/Users/I043125/work/ThorSalesDistributionUI/admin/",
+                "js/supplyChain/PurchaseReturnOrderList.js"
+        );
 
         System.out.println("=== PageModuleCopier ===");
-        PageModuleCopier.mainEntry(rootNodeInstId, itemNodeInstId, groupId, MODEL_CAT_DOCUMENT);
+        PageModuleCopier.mainEntry(params);
 
         System.out.println("\n=== ServiceManagerCopier ===");
-        ServiceManagerCopier.mainEntry(rootNodeInstId, itemNodeInstId, groupId, MODEL_CAT_DOCUMENT);
+        ServiceManagerCopier.mainEntry(params);
 
         System.out.println("\n=== I18nCopier ===");
-        I18nCopier.mainEntry(rootNodeInstId, itemNodeInstId, groupId, MODEL_CAT_DOCUMENT);
+        I18nCopier.mainEntry(params);
 
         System.out.println("\nAll done.");
     }
