@@ -1,6 +1,7 @@
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.util.*;
 import java.util.regex.*;
 
 /**
@@ -44,7 +45,8 @@ public class ListControllerMigrator {
         String searchBlock = extractSearchContentBlock(legacy);
         System.out.println("=== searchContent ===");
         if (searchBlock != null) {
-            System.out.println(searchBlock.replace("ServiceUIControllerConstants.", "ServiceUIConstants."));
+            System.out.println("\treadonly searchContent: Record<string, unknown> = "
+                    + searchBlock.replace("ServiceUIControllerConstants.", "ServiceUIConstants.") + ";");
         } else {
             System.out.println("(not found)");
         }
@@ -52,9 +54,18 @@ public class ListControllerMigrator {
         String pageMetaBlock = extractGetDefaultPageMetaBlock(legacy);
         System.out.println("\n=== getDefaultPageMeta ===");
         if (pageMetaBlock != null) {
-            System.out.println(convertPageMetaToTypeScript(pageMetaBlock, params.rootNodeInstId));
+            String body = convertPageMetaToTypeScript(pageMetaBlock, params.rootNodeInstId);
+            System.out.println("\tprotected getDefaultPageMeta(): PageMeta {\n\t\treturn " + body + ";\n\t}");
         } else {
             System.out.println("(not found)");
+        }
+
+        Map<String, String> customMethods = EditorControllerMigrator.extractCustomMethods(legacy);
+        System.out.println("\n=== Custom methods (" + customMethods.size() + ") ===");
+        for (Map.Entry<String, String> entry : customMethods.entrySet()) {
+            System.out.println("\n-- " + entry.getKey() + " --");
+            System.out.println(EditorControllerMigrator.convertCustomMethodToTypeScript(
+                    entry.getKey(), entry.getValue(), params.rootNodeInstId));
         }
     }
 
@@ -114,6 +125,22 @@ public class ListControllerMigrator {
             }
         } else {
             System.out.println("ListControllerMigrator: getDefaultPageMeta not found in legacy file.");
+        }
+
+        // 3. append custom methods
+        Map<String, String> customMethods = EditorControllerMigrator.extractCustomMethods(legacy);
+        if (!customMethods.isEmpty()) {
+            Map<String, String> converted = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : customMethods.entrySet()) {
+                converted.put(entry.getKey(),
+                        EditorControllerMigrator.convertCustomMethodToTypeScript(
+                                entry.getKey(), entry.getValue(), params.rootNodeInstId));
+            }
+            String withCustom = EditorControllerMigrator.appendCustomMethods(content, converted);
+            if (!withCustom.equals(content)) {
+                content = withCustom;
+                System.out.println("ListControllerMigrator: appended custom methods to " + targetFile.getFileName());
+            }
         }
 
         Files.writeString(targetFile, content, StandardCharsets.UTF_8);

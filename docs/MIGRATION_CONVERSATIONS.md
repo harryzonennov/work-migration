@@ -10096,3 +10096,61 @@ called `loadMetaRequest({ url })` with no field mapping, so `.text` and `.id` re
 - `src/pages/logistics/inboundDelivery/useInboundDeliveryEditController.ts`
 - `src/pages/logistics/inboundDelivery/useInboundDeliveryListController.ts`
 - `src/pages/logistics/inboundDelivery/useInboundItemController.ts`
+
+---
+
+### Update — ContentTypeMigrator (2026-08-28)
+
+**Files created**
+- `migrationTools/ContentTypeMigrator.java` — new migrator that reads a `*ServiceUIModel.java` from the backend, recursively traverses all referenced UIModel/ServiceUIModel classes, and generates the corresponding `*Content.ts` in `IntelligentUI/src/types/{groupId}/`. Handles: base class → TS platform import mapping, `List<X>` → `X[]`, action node fields optional, nested ServiceUIModel wrappers without `serviceUIMeta`, root ServiceUIModel with `serviceUIMeta`.
+
+**Files modified**
+- `migrationTools/compile.sh` — added `ContentTypeMigrator.java` to the `javac` command
+
+---
+
+### Update — EditorControllerMigrator fixes (2026-08-30)
+
+**Files modified**
+- `migrationTools/EditorControllerMigrator.java` — two fixes in `convertEditorPageMetaToTypeScript()`:
+  1. Removed the regex that dropped the `placeholder: { category: ProcessButtonConstants.placeholderCategory.DOC_ACTION_BTN }` block from `processButtonMeta` — it must be preserved
+  2. Removed `disabled` from the `dropKey` list — `disabled:` properties on sections and `fieldMetaList` entries must be preserved
+
+---
+
+### Update — EditorControllerMigrator getActionCodeMatrix (2026-08-30)
+
+**Files modified**
+- `migrationTools/EditorControllerMigrator.java` — added `getActionCodeMatrix` migration:
+  - `extractGetActionCodeMatrixBlock()` — extracts the `return {…}` block from legacy `getActionCodeMatrix:`
+  - `convertActionCodeMatrixToTypeScript()` — applies conversions: `vm.content.*UIModel.uuid` → `this.getBaseUUID()`, `vm.$refs.multiSelectFactory` → `this.extraDeps.multiSelectFactory`, `DocumentItemMultiSelectFactory.USE_CASE.X` → `DocumentItemMultiSelectFactory_USE_CASE.X`, URL `'../mod/method.html'` → `'mod/method'`, `vm.` → `this.`
+  - `patchGetActionCodeMatrix()` — replaces the body of `getActionCodeMatrix()` in the target EditController
+  - Wired into both `previewMigration()` and `migrate()`
+
+---
+
+### Update — PurchaseRequest mergePurchaseBatch migration (2026-08-30)
+
+**Files modified**
+- `IntelligentUI/src/pages/logistics/purchaseRequest/PurchaseRequestEditController.tsx`:
+  - Added import: `USE_CASE as DocumentItemMultiSelectFactory_USE_CASE` from `@/components/doc/DocItemMultiSelectConstants`
+  - Ported `mergePurchaseBatch` from legacy `PurchaseRequestEditor.js` as arrow method:
+    - `vm.$refs.multiSelectFactory.initBatchSelection(...)` → `this.extraDeps.multiSelectFactory?.initBatchSelection(...)`
+    - `vm.content.purchaseRequestUIModel.uuid` → `this.getBaseUUID()`
+    - `DocumentItemMultiSelectFactory.USE_CASE.MERGE_DOC` → `DocumentItemMultiSelectFactory_USE_CASE.MERGE_DOC`
+    - URL `'../purchaseRequest/searchModuleService.html'` → `'purchaseRequest/searchModuleService'`
+    - `fnExecutionDone` calls `this.refreshEditView()` (base class method)
+    - Dropped: `ServiceMessageBarHelper.removeMessageBar` (handled by framework), `$.Notification.notify` (handled by framework), `.bind(this)` (arrow function)
+
+### Update — extractCustomMethods bug fixes (2026-08-30)
+
+#### Files modified
+- `migrationTools/EditorControllerMigrator.java` — fixed two bugs in custom method extraction:
+  1. `extractCustomMethods`: regex now requires exactly 8-space indentation so nested callbacks like `fnExecutionDone: function` inside method bodies are no longer captured as top-level Vue methods
+  2. `convertCustomMethodToTypeScript`: added stripping of `var vm = this;` / `const vm = this;` lines from the converted output (all `vm.` references are already replaced before this point)
+
+### Update — Preview output with full method declarations (2026-08-30)
+
+#### Files modified
+- `migrationTools/EditorControllerMigrator.java` — `previewMigration` now wraps `getDefaultPageMeta` output in `protected getDefaultPageMeta(): PageMeta { return ...; }` and `getActionCodeMatrix` output in `getActionCodeMatrix() { return ...; }` declarations
+- `migrationTools/ListControllerMigrator.java` — `previewMigration` now wraps `searchContent` output in `readonly searchContent: Record<string, unknown> = ...;` and `getDefaultPageMeta` output in `protected getDefaultPageMeta(): PageMeta { return ...; }` declarations

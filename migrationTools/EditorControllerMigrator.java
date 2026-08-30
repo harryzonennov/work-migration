@@ -1,6 +1,7 @@
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.util.*;
 import java.util.regex.*;
 
 /**
@@ -41,13 +42,30 @@ public class EditorControllerMigrator {
             return;
         }
         String legacy = Files.readString(legacyFile, StandardCharsets.UTF_8);
-        String block = extractGetDefaultPageMetaBlock(legacy);
 
+        String block = extractGetDefaultPageMetaBlock(legacy);
         System.out.println("=== " + toPascal(params.rootNodeInstId) + "EditController getDefaultPageMeta ===");
         if (block != null) {
-            System.out.println(convertEditorPageMetaToTypeScript(block, params.rootNodeInstId));
+            String body = convertEditorPageMetaToTypeScript(block, params.rootNodeInstId);
+            System.out.println("\tprotected getDefaultPageMeta(): PageMeta {\n\t\treturn " + body + ";\n\t}");
         } else {
             System.out.println("(not found)");
+        }
+
+        String acmBlock = extractGetActionCodeMatrixBlock(legacy);
+        System.out.println("\n=== " + toPascal(params.rootNodeInstId) + "EditController getActionCodeMatrix ===");
+        if (acmBlock != null) {
+            String body = convertActionCodeMatrixToTypeScript(acmBlock, params.rootNodeInstId);
+            System.out.println("\tgetActionCodeMatrix() {\n\t\treturn " + body + ";\n\t}");
+        } else {
+            System.out.println("(not found)");
+        }
+
+        Map<String, String> customMethods = extractCustomMethods(legacy);
+        System.out.println("\n=== Custom methods (" + customMethods.size() + ") ===");
+        for (Map.Entry<String, String> entry : customMethods.entrySet()) {
+            System.out.println("\n-- " + entry.getKey() + " --");
+            System.out.println(convertCustomMethodToTypeScript(entry.getKey(), entry.getValue(), params.rootNodeInstId));
         }
     }
 
@@ -94,6 +112,38 @@ public class EditorControllerMigrator {
 
         Files.writeString(targetFile, patched, StandardCharsets.UTF_8);
         System.out.println("EditorControllerMigrator: patched getDefaultPageMeta in " + targetFile.getFileName());
+
+        // 2. patch getActionCodeMatrix
+        String acmBlock = extractGetActionCodeMatrixBlock(legacy);
+        if (acmBlock != null) {
+            String tsAcm = convertActionCodeMatrixToTypeScript(acmBlock, params.rootNodeInstId);
+            String patchedAcm = patchGetActionCodeMatrix(patched, tsAcm);
+            if (patchedAcm != null) {
+                patched = patchedAcm;
+                System.out.println("EditorControllerMigrator: patched getActionCodeMatrix in " + targetFile.getFileName());
+            } else {
+                System.out.println("EditorControllerMigrator: getActionCodeMatrix not found in target, skipping patch.");
+            }
+            Files.writeString(targetFile, patched, StandardCharsets.UTF_8);
+        } else {
+            System.out.println("EditorControllerMigrator: getActionCodeMatrix not found in legacy file.");
+        }
+
+        // 3. append custom methods
+        Map<String, String> customMethods = extractCustomMethods(legacy);
+        if (!customMethods.isEmpty()) {
+            Map<String, String> converted = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : customMethods.entrySet()) {
+                converted.put(entry.getKey(),
+                        convertCustomMethodToTypeScript(entry.getKey(), entry.getValue(), params.rootNodeInstId));
+            }
+            String withCustom = appendCustomMethods(patched, converted);
+            if (!withCustom.equals(patched)) {
+                patched = withCustom;
+                Files.writeString(targetFile, patched, StandardCharsets.UTF_8);
+                System.out.println("EditorControllerMigrator: appended custom methods to " + targetFile.getFileName());
+            }
+        }
     }
 
     // ── derive the legacy editor JS file path from params ────────────────────
@@ -125,6 +175,63 @@ public class EditorControllerMigrator {
         return extractBraceBlock(src, braceOpen);
     }
 
+    // ── extract the return { ... } block of getActionCodeMatrix ──────────────
+
+    static String extractGetActionCodeMatrixBlock(String src) {
+        int fnStart = src.indexOf("getActionCodeMatrix:");
+        if (fnStart < 0) return null;
+        int returnIdx = src.indexOf("return {", fnStart);
+        if (returnIdx < 0) return null;
+        int braceOpen = src.indexOf('{', returnIdx);
+        if (braceOpen < 0) return null;
+        return extractBraceBlock(src, braceOpen);
+    }
+
+    // ── convert legacy getActionCodeMatrix return block to TypeScript ─────────
+    //
+    // Rules:
+    //   vm.content.{root}UIModel.uuid  →  this.getBaseUUID()
+    //   vm.$refs.multiSelectFactory    →  this.extraDeps.multiSelectFactory
+    //   DocumentItemMultiSelectFactory.USE_CASE.X  →  DocumentItemMultiSelectFactory_USE_CASE.X
+    //   URL '../moduleName/methodName.html'  →  'moduleName/methodName'
+    //   vm.xxx  →  this.xxx
+
+    static String convertActionCodeMatrixToTypeScript(String jsBlock, String rootNodeInstId) {
+        String ts = jsBlock;
+
+        // vm.content.*UIModel.uuid → this.getBaseUUID()
+        ts = ts.replaceAll("\\bvm\\.content\\.\\w+UIModel\\.uuid\\b", "this.getBaseUUID()");
+
+        // vm.$refs.multiSelectFactory → this.extraDeps.multiSelectFactory
+        ts = ts.replace("vm.$refs.multiSelectFactory", "this.extraDeps.multiSelectFactory");
+
+        // DocumentItemMultiSelectFactory.USE_CASE.X → DocumentItemMultiSelectFactory_USE_CASE.X
+        ts = ts.replace("DocumentItemMultiSelectFactory.USE_CASE.", "DocumentItemMultiSelectFactory_USE_CASE.");
+
+        // URL: '../moduleName/methodName.html' → 'moduleName/methodName'
+        ts = ts.replaceAll("'\\.\\./(\\w+)/(\\w+)\\.html'", "'$1/$2'");
+
+        // Remaining vm.xxx → this.xxx
+        ts = ts.replaceAll("\\bvm\\.", "this.");
+
+        return ts;
+    }
+
+    // ── patch getActionCodeMatrix() body in the generated EditController ───────
+
+    static String patchGetActionCodeMatrix(String content, String tsBlock) {
+        Pattern pattern = Pattern.compile(
+                "(getActionCodeMatrix\\(\\)[^{]*\\{[\\s\\n]*return\\s*)\\{.*?\\}(;?\\s*\\})",
+                Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(content);
+        if (!matcher.find()) return null;
+
+        String replacement = matcher.group(1) + tsBlock + ";" + matcher.group(2);
+        return content.substring(0, matcher.start())
+                + replacement
+                + content.substring(matcher.end());
+    }
+
     static String extractBraceBlock(String src, int start) {
         int depth = 0;
         for (int i = start; i < src.length(); i++) {
@@ -144,19 +251,8 @@ public class EditorControllerMigrator {
     //   Drop top-level: pageId, pageCategory, labelObject, parentVue, parentContent,
     //                   serviceManager, coreModelId, i18nPath, helpDocumentName,
     //                   getDocActionNodeListURL
-    //   Add:  documentType: '{RootPascal}'
-    //   vm.xxx → this.xxx   |   vm: vm → vm: this
-    //   AsyncSection.sectionCategory.X → SectionCategory.X
-    //   AbsInput.FIELDTYPE.Select2   → (handled via fieldType: 'select')
-    //   AbsInput.FIELDTYPE.TextArea  → (handled via fieldType: 'textarea')
-    //   datetime: true → fieldType: 'date'  (approximation — manual review still needed)
-    //   Tab keys: titleLabelKey → tabTitle (prefixed with entity i18n key)
-    //             titleIcon     → tabIcon
-    //   Section: drop sectionId, titleLabelKey, titleHelpKey, titleIcon,
-    //                 updatedByUidPath, updatedByNamePath, updatedDatePath, disabled,
-    //                 labelPath, prefixLabel, helpConfigureList, editBlock, pageOnly (kept),
-    //                 customerRequired, accountObjectType (kept)
-    //   processButtonMeta: drop placeholder category line
+    //   Keep: placeholder block in processButtonMeta (DOC_ACTION_BTN placeholder)
+    //   Keep: disabled on fieldMetaList entries
 
     static String convertEditorPageMetaToTypeScript(String jsBlock, String rootNodeInstId) {
         String entityKey = toCamel(rootNodeInstId);
@@ -179,9 +275,6 @@ public class EditorControllerMigrator {
         ts = dropKey(ts, "i18nPath");
         ts = dropKey(ts, "getDocActionNodeListURL");
         ts = ts.replaceAll("(?s)[ \\t]*helpDocumentName:\\s*\\[[^\\]]*\\],?\\n", "");
-
-        // Drop placeholder in processButtonMeta
-        ts = ts.replaceAll("(?s)[ \\t]*placeholder:\\s*\\{[^}]*\\},?\\n", "");
 
         // AsyncSection.sectionCategory → SectionCategory
         ts = ts.replace("AsyncSection.sectionCategory.", "SectionCategory.");
@@ -208,7 +301,7 @@ public class EditorControllerMigrator {
         ts = dropKey(ts, "updatedByUidPath");
         ts = dropKey(ts, "updatedByNamePath");
         ts = dropKey(ts, "updatedDatePath");
-        ts = dropKey(ts, "disabled");
+
         ts = dropKey(ts, "labelPath");
         ts = dropKey(ts, "prefixLabel");
         ts = dropKey(ts, "editBlock");
@@ -241,6 +334,129 @@ public class EditorControllerMigrator {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /** Methods provided by the base class — never migrate these. */
+    static final Set<String> FRAMEWORK_METHODS = new HashSet<>(Arrays.asList(
+        "initSubComponentsController", "getServiceManager", "getPrefixURL",
+        "getEditPageURL", "getBaseUUID", "getStatus", "setModuleToUI",
+        "getDefaultPageMeta", "getActionCodeMatrix",
+        "getUploadItemExcelBaseUrl", "getDownloadItemExcelBaseUrl",
+        "setI18nCallback", "getResourceId", "created", "mounted",
+        "beforeDestroy", "destroyed"
+    ));
+
+    /**
+     * Extract all non-framework methods from a legacy Vue methods block.
+     * Returns ordered map of methodName → raw JS function body (the { ... } block only).
+     */
+    static Map<String, String> extractCustomMethods(String src) {
+        Map<String, String> result = new LinkedHashMap<>();
+        // Match top-level Vue methods block entries: exactly 8 spaces indent.
+        // Nested callbacks like fnExecutionDone are at 12+ spaces — excluded.
+        Pattern methodPat = Pattern.compile(
+            "(?m)^        (\\w+):\\s*function\\s*\\([^)]*\\)\\s*\\{");
+        Matcher m = methodPat.matcher(src);
+        while (m.find()) {
+            String name = m.group(1);
+            if (FRAMEWORK_METHODS.contains(name)) continue;
+            // Extract the brace block starting at the { of the function
+            int braceStart = m.end() - 1; // position of the opening {
+            String body = extractBraceBlock(src, braceStart);
+            if (body != null) {
+                result.put(name, body);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Convert a single legacy JS method body to a TypeScript arrow method.
+     * Applies the same vm/URL/USE_CASE/multiSelectFactory conversions as
+     * convertActionCodeMatrixToTypeScript, plus:
+     *   - window.location.href = "XxxList.html"  →  this.navigateToList()
+     *   - fnExecutionDone: function(...) { ... }.bind(this)  →  fnExecutionDone: (...) => { ... }
+     *   - var xxx = ...  →  const xxx = ...
+     *   - vm.label.xxx  →  this.getLabel('xxx')
+     *   - .bind(this) at end of callbacks → drop
+     */
+    static String convertCustomMethodToTypeScript(String name, String body, String rootNodeInstId) {
+        String ts = body;
+
+        // vm.content.*UIModel.uuid → this.getBaseUUID()
+        ts = ts.replaceAll("\\bvm\\.content\\.\\w+UIModel\\.uuid\\b", "this.getBaseUUID()");
+
+        // vm.$refs.multiSelectFactory → this.extraDeps.multiSelectFactory
+        ts = ts.replace("vm.$refs.multiSelectFactory", "this.extraDeps.multiSelectFactory");
+
+        // DocumentItemMultiSelectFactory.USE_CASE.X → DocumentItemMultiSelectFactory_USE_CASE.X
+        ts = ts.replace("DocumentItemMultiSelectFactory.USE_CASE.", "DocumentItemMultiSelectFactory_USE_CASE.");
+
+        // URL: '../moduleName/methodName.html' → 'moduleName/methodName'
+        ts = ts.replaceAll("'\\.\\./(\\w+)/(\\w+)\\.html'", "'$1/$2'");
+
+        // window.location.href = "XxxList.html" → this.navigateToList()
+        ts = ts.replaceAll("window\\.location\\.href\\s*=\\s*[\"'][^\"']+[\"'];?", "this.navigateToList();");
+
+        // fnExecutionDone: function(param) { ... }.bind(this) → fnExecutionDone: (param) => { ... }
+        ts = ts.replaceAll("(fnExecutionDone:\\s*)function\\s*\\(([^)]*)\\)\\s*(\\{)",
+                "$1($2) => $3");
+        ts = ts.replaceAll("\\}\\.bind\\(this\\)", "}");
+        ts = ts.replaceAll("\\}\\.bind\\(vm\\)", "}");
+
+        // var → const
+        ts = ts.replaceAll("(?m)^([ \\t]*)var\\b", "$1const");
+
+        // vm.label.xxx → this.getLabel('xxx')  (no direct equivalent — mark with TODO)
+        ts = ts.replaceAll("\\bvm\\.label\\.(\\w+)\\b", "/* TODO: i18n */ this.getLabel('$1')");
+
+        // $.Notification.notify(...) → // TODO: show success toast
+        ts = ts.replaceAll("(?m)[ \\t]*\\$\\.Notification\\.notify\\([^;]+\\);?\\n?",
+                "\t\t\t// TODO: show success toast\n");
+
+        // ServiceMessageBarHelper.removeMessageBar → drop
+        ts = ts.replaceAll("(?m)[ \\t]*ServiceMessageBarHelper\\.removeMessageBar\\([^;]+\\);?\\n?", "");
+
+        // Remaining vm.xxx → this.xxx
+        ts = ts.replaceAll("\\bvm\\.", "this.");
+
+        // Strip "var vm = this;" / "const vm = this;" — all vm. refs already replaced
+        ts = ts.replaceAll("(?m)^[ \\t]*(?:var|const)\\s+vm\\s*=\\s*this;\\s*\\n", "");
+
+        // Wrap as arrow method:  name = (): void => { <body lines> };
+        // Strip outer braces from body, re-indent content
+        String inner = ts.substring(1, ts.length() - 1); // strip { }
+        // Remove leading/trailing blank lines
+        inner = inner.replaceAll("^\\n+", "").replaceAll("\\n+$", "");
+
+        return "\t" + name + " = (): void => {\n"
+                + inner + "\n"
+                + "\t};";
+    }
+
+    /**
+     * Append converted custom methods before the closing `}` of the class in the target file.
+     * Skips any method whose name already appears in the target (idempotent).
+     */
+    static String appendCustomMethods(String content, Map<String, String> converted) {
+        if (converted.isEmpty()) return content;
+
+        StringBuilder toAppend = new StringBuilder();
+        for (Map.Entry<String, String> entry : converted.entrySet()) {
+            String name = entry.getKey();
+            // Skip if method already defined in target
+            if (content.contains(name + " =") || content.contains(name + "()")) continue;
+            toAppend.append("\n").append(entry.getValue()).append("\n");
+        }
+
+        if (toAppend.length() == 0) return content;
+
+        // Insert before the last `}` that closes the class
+        int lastBrace = content.lastIndexOf('}');
+        if (lastBrace < 0) return content;
+        return content.substring(0, lastBrace)
+                + toAppend
+                + content.substring(lastBrace);
+    }
 
     static String dropKey(String src, String key) {
         return src.replaceAll("(?m)[ \\t]*" + key + ":\\s*[^,\\n{\\[]+,?\\n", "");
