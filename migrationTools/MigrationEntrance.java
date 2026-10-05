@@ -12,12 +12,15 @@ public class MigrationEntrance {
     public static void main(String[] args) throws Exception {
         CopierParams params = new CopierParams(
                 "purchaseReturnOrder",
-                "outboundItem",
+                "purchaseReturnMaterialItem",
                 "logistics",
                 MODEL_CAT_DOCUMENT,
                 "/Users/I043125/work/ThorSalesDistributionUI/admin/",
                 "js/supplyChain/PurchaseReturnOrderList.js"
         );
+
+        System.out.println("=== ContentCopier ===");
+        ContentTypeMigrator.migrate(ContentTypeMigrator.DEFAULT_ROOT_JAVA, ContentTypeMigrator.DEFAULT_GROUP_ID);
 
         System.out.println("=== PageModuleCopier ===");
         PageModuleCopier.mainEntry(params);

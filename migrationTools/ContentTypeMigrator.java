@@ -29,7 +29,7 @@ public class ContentTypeMigrator {
     /** Default input for standalone dry-run */
     static final String DEFAULT_ROOT_JAVA =
             "/Users/I043125/work2/IntelligentPlatform/src/main/java/"
-            + "com/company/IntelligentPlatform/logistics/dto/PurchaseContractServiceUIModel.java";
+            + "com/company/IntelligentPlatform/logistics/dto/PurchaseReturnOrderServiceUIModel.java";
 
     static final String DEFAULT_GROUP_ID = "logistics";
 
@@ -89,7 +89,7 @@ public class ContentTypeMigrator {
     // ── Entry points ─────────────────────────────────────────────────────────
 
     public static void main(String[] args) throws IOException {
-        previewMigration(DEFAULT_ROOT_JAVA, DEFAULT_GROUP_ID);
+        migrate(DEFAULT_ROOT_JAVA, DEFAULT_GROUP_ID);
     }
 
     public static void previewMigration(String rootJavaPath, String groupId) throws IOException {
