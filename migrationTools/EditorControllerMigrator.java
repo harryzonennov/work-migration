@@ -124,7 +124,6 @@ public class EditorControllerMigrator {
             } else {
                 System.out.println("EditorControllerMigrator: getActionCodeMatrix not found in target, skipping patch.");
             }
-            Files.writeString(targetFile, patched, StandardCharsets.UTF_8);
         } else {
             System.out.println("EditorControllerMigrator: getActionCodeMatrix not found in legacy file.");
         }
@@ -140,10 +139,17 @@ public class EditorControllerMigrator {
             String withCustom = appendCustomMethods(patched, converted);
             if (!withCustom.equals(patched)) {
                 patched = withCustom;
-                Files.writeString(targetFile, patched, StandardCharsets.UTF_8);
                 System.out.println("EditorControllerMigrator: appended custom methods to " + targetFile.getFileName());
             }
         }
+
+        // inject import for DocumentItemMultiSelectFactory_USE_CASE if any custom method or ACM uses it
+        String withImportFinal = injectDocItemMultiSelectImportIfNeeded(patched);
+        if (!withImportFinal.equals(patched)) {
+            patched = withImportFinal;
+            System.out.println("EditorControllerMigrator: injected DocItemMultiSelectConstants import in " + targetFile.getFileName());
+        }
+        Files.writeString(targetFile, patched, StandardCharsets.UTF_8);
     }
 
     // ── derive the legacy editor JS file path from params ────────────────────
@@ -191,7 +197,7 @@ public class EditorControllerMigrator {
     //
     // Rules:
     //   vm.content.{root}UIModel.uuid  →  this.getBaseUUID()
-    //   vm.$refs.multiSelectFactory    →  this.extraDeps.multiSelectFactory
+    //   vm.$refs.multiSelectFactory    →  this.deps.multiSelectFactory
     //   DocumentItemMultiSelectFactory.USE_CASE.X  →  DocumentItemMultiSelectFactory_USE_CASE.X
     //   URL '../moduleName/methodName.html'  →  'moduleName/methodName'
     //   vm.xxx  →  this.xxx
@@ -202,8 +208,8 @@ public class EditorControllerMigrator {
         // vm.content.*UIModel.uuid → this.getBaseUUID()
         ts = ts.replaceAll("\\bvm\\.content\\.\\w+UIModel\\.uuid\\b", "this.getBaseUUID()");
 
-        // vm.$refs.multiSelectFactory → this.extraDeps.multiSelectFactory
-        ts = ts.replace("vm.$refs.multiSelectFactory", "this.extraDeps.multiSelectFactory");
+        // vm.$refs.multiSelectFactory → this.deps.multiSelectFactory
+        ts = ts.replace("vm.$refs.multiSelectFactory", "this.deps.multiSelectFactory");
 
         // DocumentItemMultiSelectFactory.USE_CASE.X → DocumentItemMultiSelectFactory_USE_CASE.X
         ts = ts.replace("DocumentItemMultiSelectFactory.USE_CASE.", "DocumentItemMultiSelectFactory_USE_CASE.");
@@ -226,10 +232,41 @@ public class EditorControllerMigrator {
         Matcher matcher = pattern.matcher(content);
         if (!matcher.find()) return null;
 
-        String replacement = matcher.group(1) + tsBlock + ";" + matcher.group(2);
+        // group(2) already contains the trailing ";" (captured by ";?"), so don't append another
+        String replacement = matcher.group(1) + tsBlock + matcher.group(2);
         return content.substring(0, matcher.start())
                 + replacement
                 + content.substring(matcher.end());
+    }
+
+    static final String IMPORT_DOC_ITEM_MULTI_SELECT_USE_CASE =
+            "import { USE_CASE as DocumentItemMultiSelectFactory_USE_CASE }" +
+            " from '@/components/doc/DocItemMultiSelectConstants';";
+
+    /**
+     * If the patched content references DocumentItemMultiSelectFactory_USE_CASE but the
+     * import isn't present yet, inject it after the last existing import line.
+     */
+    static String injectDocItemMultiSelectImportIfNeeded(String content) {
+        if (!content.contains("DocumentItemMultiSelectFactory_USE_CASE")) return content;
+        if (content.contains("DocItemMultiSelectConstants")) return content;
+
+        // Find the end of the last import statement
+        int lastImportEnd = -1;
+        int searchFrom = 0;
+        while (true) {
+            int idx = content.indexOf("import ", searchFrom);
+            if (idx < 0) break;
+            int lineEnd = content.indexOf('\n', idx);
+            if (lineEnd < 0) lineEnd = content.length();
+            lastImportEnd = lineEnd;
+            searchFrom = lineEnd + 1;
+        }
+
+        if (lastImportEnd < 0) return content;
+        return content.substring(0, lastImportEnd + 1)
+                + IMPORT_DOC_ITEM_MULTI_SELECT_USE_CASE + "\n"
+                + content.substring(lastImportEnd + 1);
     }
 
     static String extractBraceBlock(String src, int start) {
@@ -310,6 +347,16 @@ public class EditorControllerMigrator {
         ts = dropKey(ts, "titleLabelKey");  // any remaining after tab rename
         ts = ts.replaceAll("(?s)[ \\t]*helpConfigureList:\\s*\\[[^\\]]*\\],?\\n", "");
 
+        // priceConfig: drop legacy auth fields, strip xxxUIModel. prefix from field paths
+        // actionCode: this.author.actionCode.PriceInfo, → drop
+        ts = ts.replaceAll("(?m)[ \\t]*actionCode:\\s*this\\.author\\.actionCode\\.\\w+,?\\n", "");
+        // actionCodePromise: this.initAuthorResourceCheck(), → drop
+        ts = ts.replaceAll("(?m)[ \\t]*actionCodePromise:\\s*[^,\\n]+,?\\n", "");
+        // priceField: 'xxxUIModel.fieldName' → priceField: 'fieldName'
+        ts = ts.replaceAll("(priceField:\\s*')(\\w+UIModel\\.)(\\w+')", "$1$3");
+        // priceDisplayField: 'xxxUIModel.fieldName' → priceDisplayField: 'fieldName'
+        ts = ts.replaceAll("(priceDisplayField:\\s*')(\\w+UIModel\\.)(\\w+')", "$1$3");
+
         // minWidth string → keep as-is (already correct for EMBEDLIST columns)
 
         // Add documentType as first key
@@ -327,7 +374,7 @@ public class EditorControllerMigrator {
         Matcher matcher = pattern.matcher(content);
         if (!matcher.find()) return null;
 
-        String replacement = matcher.group(1) + tsBlock + ";" + matcher.group(2);
+        String replacement = matcher.group(1) + tsBlock + matcher.group(2);
         return content.substring(0, matcher.start())
                 + replacement
                 + content.substring(matcher.end());
@@ -385,8 +432,8 @@ public class EditorControllerMigrator {
         // vm.content.*UIModel.uuid → this.getBaseUUID()
         ts = ts.replaceAll("\\bvm\\.content\\.\\w+UIModel\\.uuid\\b", "this.getBaseUUID()");
 
-        // vm.$refs.multiSelectFactory → this.extraDeps.multiSelectFactory
-        ts = ts.replace("vm.$refs.multiSelectFactory", "this.extraDeps.multiSelectFactory");
+        // vm.$refs.multiSelectFactory → this.deps.multiSelectFactory
+        ts = ts.replace("vm.$refs.multiSelectFactory", "this.deps.multiSelectFactory");
 
         // DocumentItemMultiSelectFactory.USE_CASE.X → DocumentItemMultiSelectFactory_USE_CASE.X
         ts = ts.replace("DocumentItemMultiSelectFactory.USE_CASE.", "DocumentItemMultiSelectFactory_USE_CASE.");
@@ -394,8 +441,11 @@ public class EditorControllerMigrator {
         // URL: '../moduleName/methodName.html' → 'moduleName/methodName'
         ts = ts.replaceAll("'\\.\\./(\\w+)/(\\w+)\\.html'", "'$1/$2'");
 
-        // window.location.href = "XxxList.html" → this.navigateToList()
-        ts = ts.replaceAll("window\\.location\\.href\\s*=\\s*[\"'][^\"']+[\"'];?", "this.navigateToList();");
+        // window.location.href = "XxxList.html" → this.deps.actionRef.current?.reload()
+        ts = ts.replaceAll("window\\.location\\.href\\s*=\\s*[\"'][^\"']+[\"'];?", "this.deps.actionRef.current?.reload();");
+
+        // this.navigateToList() → this.deps.actionRef.current?.reload()
+        ts = ts.replaceAll("\\bthis\\.navigateToList\\(\\);?", "this.deps.actionRef.current?.reload();");
 
         // fnExecutionDone: function(param) { ... }.bind(this) → fnExecutionDone: (param) => { ... }
         ts = ts.replaceAll("(fnExecutionDone:\\s*)function\\s*\\(([^)]*)\\)\\s*(\\{)",
@@ -406,8 +456,8 @@ public class EditorControllerMigrator {
         // var → const
         ts = ts.replaceAll("(?m)^([ \\t]*)var\\b", "$1const");
 
-        // vm.label.xxx → this.getLabel('xxx')  (no direct equivalent — mark with TODO)
-        ts = ts.replaceAll("\\bvm\\.label\\.(\\w+)\\b", "/* TODO: i18n */ this.getLabel('$1')");
+        // vm.label.xxx → i18n.t(this.resolveKey('xxx'))
+        ts = ts.replaceAll("\\bvm\\.label\\.(\\w+)\\b", "i18n.t(this.resolveKey('$1'))");
 
         // $.Notification.notify(...) → // TODO: show success toast
         ts = ts.replaceAll("(?m)[ \\t]*\\$\\.Notification\\.notify\\([^;]+\\);?\\n?",

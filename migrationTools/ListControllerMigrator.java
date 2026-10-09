@@ -143,6 +143,13 @@ public class ListControllerMigrator {
             }
         }
 
+        // inject import for DocumentItemMultiSelectFactory_USE_CASE if any custom method uses it
+        String withImport = EditorControllerMigrator.injectDocItemMultiSelectImportIfNeeded(content);
+        if (!withImport.equals(content)) {
+            content = withImport;
+            System.out.println("ListControllerMigrator: injected DocItemMultiSelectConstants import in " + targetFile.getFileName());
+        }
+
         Files.writeString(targetFile, content, StandardCharsets.UTF_8);
     }
 
