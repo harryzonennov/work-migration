@@ -60,12 +60,12 @@ public class ListControllerMigrator {
             System.out.println("(not found)");
         }
 
-        Map<String, String> customMethods = EditorControllerMigrator.extractCustomMethods(legacy);
+        Map<String, EditorControllerMigrator.MethodEntry> customMethods = EditorControllerMigrator.extractCustomMethodEntries(legacy);
         System.out.println("\n=== Custom methods (" + customMethods.size() + ") ===");
-        for (Map.Entry<String, String> entry : customMethods.entrySet()) {
+        for (Map.Entry<String, EditorControllerMigrator.MethodEntry> entry : customMethods.entrySet()) {
             System.out.println("\n-- " + entry.getKey() + " --");
             System.out.println(EditorControllerMigrator.convertCustomMethodToTypeScript(
-                    entry.getKey(), entry.getValue(), params.rootNodeInstId));
+                    entry.getKey(), entry.getValue().params, entry.getValue().body, params.rootNodeInstId));
         }
     }
 
@@ -128,13 +128,16 @@ public class ListControllerMigrator {
         }
 
         // 3. append custom methods
-        Map<String, String> customMethods = EditorControllerMigrator.extractCustomMethods(legacy);
+        List<ImportRegistry.Rule> extraRules = new ArrayList<>();
+        Map<String, EditorControllerMigrator.MethodEntry> customMethods = EditorControllerMigrator.extractCustomMethodEntries(legacy);
         if (!customMethods.isEmpty()) {
             Map<String, String> converted = new LinkedHashMap<>();
-            for (Map.Entry<String, String> entry : customMethods.entrySet()) {
-                converted.put(entry.getKey(),
+            for (Map.Entry<String, EditorControllerMigrator.MethodEntry> entry : customMethods.entrySet()) {
+                EditorControllerMigrator.ConversionResult result =
                         EditorControllerMigrator.convertCustomMethodToTypeScript(
-                                entry.getKey(), entry.getValue(), params.rootNodeInstId));
+                                entry.getKey(), entry.getValue().params, entry.getValue().body, params.rootNodeInstId);
+                converted.put(entry.getKey(), result.ts);
+                extraRules.addAll(result.imports);
             }
             String withCustom = EditorControllerMigrator.appendCustomMethods(content, converted);
             if (!withCustom.equals(content)) {
@@ -143,11 +146,11 @@ public class ListControllerMigrator {
             }
         }
 
-        // inject import for DocumentItemMultiSelectFactory_USE_CASE if any custom method uses it
-        String withImport = EditorControllerMigrator.injectDocItemMultiSelectImportIfNeeded(content);
+        // inject any missing imports — static rules + conditional rules from converters
+        String withImport = ImportRegistry.injectAll(content, extraRules);
         if (!withImport.equals(content)) {
             content = withImport;
-            System.out.println("ListControllerMigrator: injected DocItemMultiSelectConstants import in " + targetFile.getFileName());
+            System.out.println("ListControllerMigrator: injected missing imports in " + targetFile.getFileName());
         }
 
         Files.writeString(targetFile, content, StandardCharsets.UTF_8);
@@ -244,15 +247,23 @@ public class ListControllerMigrator {
 
         // EMBEDLIST section: drop noise keys
         ts = dropSectionKey(ts, "titleIcon");
+        ts = dropSectionKey(ts, "titlePath");
         ts = dropSectionKey(ts, "url");
         ts = dropSectionKey(ts, "editModule");
         ts = dropSectionKey(ts, "scrollX");
         ts = dropSectionKey(ts, "label");
 
-        // uuid-only fieldMeta (no labelKey on same or following line): add hidden: true, labelKey: 'id'
+        // processButtonGroupArray: button entries require labelPath.
+        // Legacy files often omit it; derive from the button's id value.
+        // Match a button id line that is NOT already followed by a labelPath line.
+        ts = ts.replaceAll(
+                "(id:\\s*'(\\w+)',)(?![\\s\\S]{0,60}labelPath:)",
+                "$1\n                        labelPath: '$2',");
+
+        // uuid-only fieldMeta (no labelKey on same or following line): add hidden: true as const, labelKey: 'id'
         ts = ts.replaceAll(
                 "(\\{\\s*\n\\s*fieldName:\\s*'[^']*\\.uuid',\\s*\n)(\\s*\\})",
-                "$1\t\t\t\t\tlabelKey: 'id',\n\t\t\t\t\thidden: true,\n$2");
+                "$1\t\t\t\t\tlabelKey: 'id',\n\t\t\t\t\thidden: true as const,\n$2");
 
         // minWidth: 'Npx' → width: N
         ts = ts.replaceAll("minWidth:\\s*'(\\d+)px'", "width: $1");
@@ -260,6 +271,15 @@ public class ListControllerMigrator {
         // SystemStandrdMetadataProxy.getDefaultPrirityCodeIconArray()
         ts = ts.replace("SystemStandrdMetadataProxy.getDefaultPrirityCodeIconArray()",
                 "getDefaultPrirityCodeIconArray()");
+
+        // fieldType conversions (matches EditorControllerMigrator)
+        ts = ts.replace("AbsInput.FIELDTYPE.Select2", "'select'");
+        ts = ts.replace("AbsInput.FIELDTYPE.TextArea", "'textarea'");
+        ts = ts.replaceAll("fieldType:\\s*AbsInput\\.FIELDTYPE\\.(\\w+)",
+                "fieldType: '$1'");
+        // datetime: true → fieldType: 'date'
+        ts = ts.replaceAll("(?m)[ \\t]*datetime:\\s*true,?\\n",
+                "\t\t\t\t\tfieldType: 'date',\n");
 
         return ts;
     }
@@ -289,19 +309,25 @@ public class ListControllerMigrator {
     }
 
     // ── patch getDefaultPageMeta() body in the generated ListController ───────
+    //
+    // Uses brace-depth counting (same as EditorControllerMigrator) to find the
+    // exact span of the return object, avoiding the \\{.*?\\} non-greedy trap.
 
     static String patchGetDefaultPageMeta(String content, String tsBlock) {
-        // Match:  protected getDefaultPageMeta() { return { ... }; }
         Pattern pattern = Pattern.compile(
-                "(protected getDefaultPageMeta\\(\\)\\s*\\{[\\s\\n]*return\\s*)\\{.*?\\}(;?\\s*\\})",
+                "protected getDefaultPageMeta\\(\\)[^{]*\\{[\\s\\n]*return\\s*(\\{)",
                 Pattern.DOTALL);
         Matcher matcher = pattern.matcher(content);
         if (!matcher.find()) return null;
 
-        String replacement = matcher.group(1) + tsBlock + ";" + matcher.group(2);
-        return content.substring(0, matcher.start())
-                + replacement
-                + content.substring(matcher.end());
+        int returnBraceStart = matcher.start(1);
+        String returnBlock = extractBraceBlock(content, returnBraceStart);
+        if (returnBlock == null) return null;
+        int returnBraceEnd = returnBraceStart + returnBlock.length();
+
+        return content.substring(0, returnBraceStart)
+                + tsBlock
+                + content.substring(returnBraceEnd);
     }
 
     static String toPascal(String s) {

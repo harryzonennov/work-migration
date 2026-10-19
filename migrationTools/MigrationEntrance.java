@@ -11,12 +11,13 @@ public class MigrationEntrance {
 
     public static void main(String[] args) throws Exception {
         CopierParams params = new CopierParams(
-                "purchaseReturnOrder",
-                "purchaseReturnMaterialItem",
+                "qualityInspectOrder",
+                "qualityInspectMatItem",
+                "qualityInspectPropertyItem",   // optional sub-item (3rd level); set null if not needed
                 "logistics",
                 MODEL_CAT_DOCUMENT,
                 "/Users/I043125/work/ThorSalesDistributionUI/admin/",
-                "js/supplyChain/PurchaseReturnOrderList.js"
+                "js/supplyChain/QualityInspectOrderList.js"
         );
 
         System.out.println("=== ContentCopier ===");

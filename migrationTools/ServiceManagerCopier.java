@@ -50,7 +50,12 @@ public class ServiceManagerCopier {
      * Parse DOC_ACTION_CODE keys from a legacy JS manager.
      * Returns ordered list of ACTION_XXX keys (e.g. ACTION_APPROVE, ACTION_SUBMIT …).
      */
-    static List<String> parseDocActionCodeKeys(String js, String rootPascal) {
+    /**
+     * Returns ordered list of [legacyKeyName, tsValue] pairs from the DOC_ACTION_CODE block.
+     * tsValue is either "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_XXX"
+     * or a raw numeric literal (e.g. "190") for hardcoded entries.
+     */
+    static List<String[]> parseDocActionCodeEntries(String js, String rootPascal) {
         // Match the DOC_ACTION_CODE block: XxxManager.DOC_ACTION_CODE = { ... };
         Pattern blockPat = Pattern.compile(
             Pattern.quote(rootPascal) + "Manager\\.DOC_ACTION_CODE\\s*=\\s*\\{([^}]+)\\}",
@@ -59,15 +64,27 @@ public class ServiceManagerCopier {
         if (!blockMatcher.find()) return Collections.emptyList();
 
         String block = blockMatcher.group(1);
-        // Each entry: KEY:DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_XXX
-        Pattern entryPat = Pattern.compile(
-            "\\b(\\w+)\\s*:\\s*DocumentConstants\\.StandardProperty\\.SystemDefDocActionCodeProxy\\.(ACTION_\\w+)");
-        Matcher entryMatcher = entryPat.matcher(block);
-        List<String> proxyKeys = new ArrayList<>();
-        while (entryMatcher.find()) {
-            proxyKeys.add(entryMatcher.group(2));  // e.g. ACTION_APPROVE
+        List<String[]> entries = new ArrayList<>();
+
+        // Entry with proxy constant: KEY : DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_XXX
+        Pattern proxyPat = Pattern.compile(
+            "\\b(\\w+)\\s*:\\s*(DocumentConstants\\.StandardProperty\\.SystemDefDocActionCodeProxy\\.ACTION_\\w+)");
+        Matcher proxyMatcher = proxyPat.matcher(block);
+        // Use a TreeMap keyed on match start position to preserve order
+        java.util.TreeMap<Integer, String[]> ordered = new java.util.TreeMap<>();
+        while (proxyMatcher.find()) {
+            ordered.put(proxyMatcher.start(), new String[]{ proxyMatcher.group(1), proxyMatcher.group(2) });
         }
-        return proxyKeys;
+
+        // Entry with numeric literal: KEY : 190
+        Pattern literalPat = Pattern.compile("\\b(\\w+)\\s*:\\s*(\\d+)");
+        Matcher literalMatcher = literalPat.matcher(block);
+        while (literalMatcher.find()) {
+            ordered.put(literalMatcher.start(), new String[]{ literalMatcher.group(1), literalMatcher.group(2) });
+        }
+
+        entries.addAll(ordered.values());
+        return entries;
     }
 
     /**
@@ -239,8 +256,8 @@ public class ServiceManagerCopier {
 
     public static void mainEntry(CopierParams params) throws IOException {
         String legacyUrl = (params.legacyUIProjectUrl != null) ? params.legacyUIProjectUrl : "";
-        mainEntry(params.rootNodeInstId, params.itemNodeInstId, params.groupId,
-                  params.modelCategory, legacyUrl);
+        mainEntry(params.rootNodeInstId, params.itemNodeInstId, params.subItemNodeInstId,
+                  params.groupId, params.modelCategory, legacyUrl);
     }
 
     public static void mainEntry(String rootNodeInstId,
@@ -248,12 +265,24 @@ public class ServiceManagerCopier {
                                  String groupId,
                                  int modelCategory,
                                  String legacyUIProjectUrl) throws IOException {
+        mainEntry(rootNodeInstId, itemNodeInstId, null, groupId, modelCategory, legacyUIProjectUrl);
+    }
 
-        String rootPascal = toPascal(rootNodeInstId);
-        String rootCamel  = toCamel(rootNodeInstId);
-        String itemPascal = itemNodeInstId != null ? toPascal(itemNodeInstId) : null;
-        String itemCamel  = itemNodeInstId != null ? toCamel(itemNodeInstId)  : null;
-        boolean hasItem   = itemNodeInstId != null;
+    public static void mainEntry(String rootNodeInstId,
+                                 String itemNodeInstId,
+                                 String subItemNodeInstId,
+                                 String groupId,
+                                 int modelCategory,
+                                 String legacyUIProjectUrl) throws IOException {
+
+        String rootPascal     = toPascal(rootNodeInstId);
+        String rootCamel      = toCamel(rootNodeInstId);
+        String itemPascal     = itemNodeInstId != null ? toPascal(itemNodeInstId) : null;
+        String itemCamel      = itemNodeInstId != null ? toCamel(itemNodeInstId)  : null;
+        boolean hasItem       = itemNodeInstId != null;
+        String subItemPascal  = subItemNodeInstId != null ? toPascal(subItemNodeInstId) : null;
+        String subItemCamel   = subItemNodeInstId != null ? toCamel(subItemNodeInstId)  : null;
+        boolean hasSubItem    = subItemNodeInstId != null;
 
         Path targetDir  = Paths.get(INTELLIGENT_UI_SERVICES, groupId);
         Files.createDirectories(targetDir);
@@ -277,7 +306,7 @@ public class ServiceManagerCopier {
         }
 
         // ── Parse legacy data ─────────────────────────────────────────────────
-        List<String> actionCodeKeys      = parseDocActionCodeKeys(jsContent, rootPascal);
+        List<String[]> actionCodeEntries = parseDocActionCodeEntries(jsContent, rootPascal);
         List<String[]> statusIconEntries = parseStatusIconEntries(jsContent, rootPascal);
         List<String[]> docFlowFields     = parseDocFlowFieldMeta(jsContent, rootPascal);
         List<String[]> popoverRootFields = parsePopoverExtraRootFields(jsContent, rootPascal);
@@ -285,9 +314,19 @@ public class ServiceManagerCopier {
         String i18nFolder                = resolveI18nFolder(jsContent, rootPascal, groupId);
 
         // Fallback defaults when legacy parsing yields nothing
-        if (actionCodeKeys.isEmpty()) actionCodeKeys = Arrays.asList(
-            "ACTION_APPROVE","ACTION_REJECT_APPROVE","ACTION_SUBMIT","ACTION_REVOKE_SUBMIT",
-            "ACTION_COUNTAPPROVE","ACTION_DELIVERY_DONE","ACTION_PROCESS_DONE","ACTION_ARCHIVE","ACTION_CANCEL");
+        if (actionCodeEntries.isEmpty()) {
+            actionCodeEntries = Arrays.asList(
+                new String[]{"APPROVE",        "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_APPROVE"},
+                new String[]{"REJECT_APPROVE", "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_REJECT_APPROVE"},
+                new String[]{"SUBMIT",         "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_SUBMIT"},
+                new String[]{"REVOKE_SUBMIT",  "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_REVOKE_SUBMIT"},
+                new String[]{"COUNTAPPROVE",   "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_COUNTAPPROVE"},
+                new String[]{"DELIVERY_DONE",  "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_DELIVERY_DONE"},
+                new String[]{"PROCESS_DONE",   "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_PROCESS_DONE"},
+                new String[]{"ARCHIVE",        "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_ARCHIVE"},
+                new String[]{"CANCEL",         "DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.ACTION_CANCEL"}
+            );
+        }
 
         if (statusIconEntries.isEmpty()) {
             // Minimal fallback
@@ -316,10 +355,26 @@ public class ServiceManagerCopier {
         // ── Generate TS ───────────────────────────────────────────────────────
         String tsContent = generateManagerTs(
             rootPascal, rootCamel, itemPascal, itemCamel, hasItem,
+            subItemPascal, subItemCamel, hasSubItem,
             groupId, i18nFolder, docTypeKey,
-            actionCodeKeys, statusIconEntries,
+            actionCodeEntries, statusIconEntries,
             referenceDates, popoverRootFields,
             docFlowFields);
+
+        // ── Append custom static methods from legacy Manager JS ───────────────
+        if (!jsContent.isEmpty()) {
+            Map<String, String[]> customMethods = extractCustomManagerMethods(jsContent, rootPascal);
+            if (!customMethods.isEmpty()) {
+                Map<String, String> converted = new LinkedHashMap<>();
+                for (Map.Entry<String, String[]> entry : customMethods.entrySet()) {
+                    converted.put(entry.getKey(),
+                        convertCustomManagerMethodToTypeScript(entry.getKey(), entry.getValue(), rootPascal));
+                }
+                tsContent = appendCustomManagerMethods(tsContent, converted);
+                System.out.println("ServiceManagerCopier: appended "
+                    + converted.size() + " custom method(s) to " + newFileName);
+            }
+        }
 
         Files.writeString(targetFile, tsContent, StandardCharsets.UTF_8);
         System.out.println("Generated: " + groupId + "/" + newFileName);
@@ -331,7 +386,7 @@ public class ServiceManagerCopier {
                                  String itemNodeInstId,
                                  String groupId,
                                  int modelCategory) throws IOException {
-        mainEntry(rootNodeInstId, itemNodeInstId, groupId, modelCategory, "");
+        mainEntry(rootNodeInstId, itemNodeInstId, null, groupId, modelCategory, "");
     }
 
     // ── TS template ───────────────────────────────────────────────────────────
@@ -340,9 +395,11 @@ public class ServiceManagerCopier {
             String rootPascal, String rootCamel,
             String itemPascal, String itemCamel,
             boolean hasItem,
+            String subItemPascal, String subItemCamel,
+            boolean hasSubItem,
             String groupId, String i18nFolder,
             String docTypeKey,
-            List<String> actionCodeKeys,
+            List<String[]> actionCodeEntries,
             List<String[]> statusIconEntries,
             List<String> referenceDates,
             List<String[]> popoverRootFields,
@@ -420,11 +477,10 @@ public class ServiceManagerCopier {
 
         // DOC_ACTION_CODE
         sb.append(tab).append("static readonly DOC_ACTION_CODE = {\n");
-        for (String proxyKey : actionCodeKeys) {
-            // Convert ACTION_APPROVE -> APPROVE (remove ACTION_ prefix)
-            String shortKey = proxyKey.startsWith("ACTION_") ? proxyKey.substring("ACTION_".length()) : proxyKey;
-            sb.append(tab).append(tab).append(shortKey)
-              .append(": DocumentConstants.StandardProperty.SystemDefDocActionCodeProxy.").append(proxyKey).append(",\n");
+        for (String[] entry : actionCodeEntries) {
+            String legacyKey = entry[0];
+            String tsValue   = entry[1];
+            sb.append(tab).append(tab).append(legacyKey).append(": ").append(tsValue).append(",\n");
         }
         sb.append(tab).append("} as const;\n\n");
 
@@ -464,6 +520,23 @@ public class ServiceManagerCopier {
             sb.append(tab).append(tab).append("return {\n");
             sb.append(tab).append(tab).append(tab).append("primaryNs: '").append(i18nNs).append("',\n");
             sb.append(tab).append(tab).append(tab).append("keyPrefix: '").append(itemCamel).append("',\n");
+            sb.append(tab).append(tab).append(tab).append("fallbackNs: 'commonElements',\n");
+            sb.append(tab).append(tab).append(tab).append("subNsAliases: {\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append("docInvolveParty: 'docInvolveParty',\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append("docActionNode: 'docActionNode',\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append("docFlowNode: 'docFlowNode',\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append("docMatItem: 'docMatItem',\n");
+            sb.append(tab).append(tab).append(tab).append("},\n");
+            sb.append(tab).append(tab).append("};\n");
+            sb.append(tab).append("}\n\n");
+        }
+
+        // getI18nSubItemConfig (only if hasSubItem)
+        if (hasSubItem) {
+            sb.append(tab).append("static getI18nSubItemConfig() {\n");
+            sb.append(tab).append(tab).append("return {\n");
+            sb.append(tab).append(tab).append(tab).append("primaryNs: '").append(i18nNs).append("',\n");
+            sb.append(tab).append(tab).append(tab).append("keyPrefix: '").append(subItemCamel).append("',\n");
             sb.append(tab).append(tab).append(tab).append("fallbackNs: 'commonElements',\n");
             sb.append(tab).append(tab).append(tab).append("subNsAliases: {\n");
             sb.append(tab).append(tab).append(tab).append(tab).append("docInvolveParty: 'docInvolveParty',\n");
@@ -591,6 +664,33 @@ public class ServiceManagerCopier {
             sb.append(tab).append("}\n\n");
         }
 
+        // getDocSubItemPopoverContent (only if hasSubItem)
+        if (hasSubItem) {
+            sb.append(tab).append("static getDocSubItemPopoverContent(): PopoverCardConfig {\n");
+            sb.append(tab).append(tab).append("return {\n");
+            sb.append(tab).append(tab).append(tab).append("docType: DocumentConstants.DocumentType.").append(docTypeKey).append(",\n");
+            sb.append(tab).append(tab).append(tab).append("targetPage: '/").append(groupId).append("/").append(subItemCamel).append("',\n");
+            sb.append(tab).append(tab).append(tab).append("referenceDate: {\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append("fieldNameList: [\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append(tab)
+              .append("'").append(subItemCamel).append("UIModel.createdDate',\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append(tab)
+              .append("'").append(subItemCamel).append("UIModel.updatedDate',\n");
+            sb.append(tab).append(tab).append(tab).append(tab).append("],\n");
+            sb.append(tab).append(tab).append(tab).append("},\n");
+            sb.append(tab).append(tab).append(tab).append("responsibleByField: '").append(subItemCamel).append("UIModel.createdByName',\n");
+            sb.append(tab).append(tab).append(tab).append("fieldMetaList: [\n");
+            sb.append(tab).append(tab).append(tab).append(tab)
+              .append("{ fieldName: '").append(subItemCamel).append("UIModel.parentDocId', labelKey: '").append(subItemCamel).append(".parentDocId' },\n");
+            sb.append(tab).append(tab).append(tab).append(tab)
+              .append("{ fieldName: '").append(subItemCamel).append("UIModel.parentDocName', labelKey: '").append(subItemCamel).append(".parentDocName' },\n");
+            sb.append(tab).append(tab).append(tab).append(tab)
+              .append("{ fieldName: '").append(subItemCamel).append("UIModel.refMaterialSKUId', labelKey: '").append(subItemCamel).append(".refMaterialSKUId' },\n");
+            sb.append(tab).append(tab).append(tab).append("],\n");
+            sb.append(tab).append(tab).append("};\n");
+            sb.append(tab).append("}\n\n");
+        }
+
         // getRootNodeInstId
         sb.append(tab).append("static getRootNodeInstId(): string {\n");
         sb.append(tab).append(tab).append("return '").append(rootCamel).append("';\n");
@@ -621,7 +721,26 @@ public class ServiceManagerCopier {
             sb.append(tab).append("static getDefaultDocumentItemEditorPage(): string {\n");
             sb.append(tab).append(tab).append("return '/").append(groupId).append("/").append(itemCamel).append("';\n");
             sb.append(tab).append("}\n\n");
+        }
 
+        if (hasSubItem) {
+            // getSubItemNodeInstId
+            sb.append(tab).append("static getSubItemNodeInstId(): string {\n");
+            sb.append(tab).append(tab).append("return '").append(subItemCamel).append("';\n");
+            sb.append(tab).append("}\n\n");
+
+            // getSubItemNodeSubPath
+            sb.append(tab).append("static getSubItemNodeSubPath(): string {\n");
+            sb.append(tab).append(tab).append("return '").append(subItemCamel).append("UIModel';\n");
+            sb.append(tab).append("}\n\n");
+
+            // getDefaultDocumentSubItemEditorPage
+            sb.append(tab).append("static getDefaultDocumentSubItemEditorPage(): string {\n");
+            sb.append(tab).append(tab).append("return '/").append(groupId).append("/").append(subItemCamel).append("';\n");
+            sb.append(tab).append("}\n\n");
+        }
+
+        if (hasItem) {
             // getDefaultDocFlowFieldConfigure — use parsed legacy fields
             sb.append(tab).append("static getDefaultDocFlowFieldConfigure(refUIModel: Record<string, unknown>) {\n");
             sb.append(tab).append(tab).append("return {\n");
@@ -678,6 +797,121 @@ public class ServiceManagerCopier {
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    // ── custom static method extraction ──────────────────────────────────────
+    //
+    // Methods already emitted by generateManagerTs — skip these when extracting
+    // custom methods from the legacy JS.
+
+    static final Set<String> FRAMEWORK_MANAGER_METHODS = new HashSet<>(Arrays.asList(
+        "getStatusURL", "getResourceId", "getDocumentType",
+        "getI18nRootConfig", "getI18nItemConfig", "getI18nSubItemConfig",
+        "getI18nPath",              // legacy only; replaced by getI18nRootConfig
+        "getStatusIconArray",
+        "getCustomActionCodeIconMap", "getActionCodeIconMap",  // action-icon arrays baked into DOC_ACTION_CODE block
+        "getDocumentPopoverContent", "getDocItemPopoverContent", "getDocSubItemPopoverContent",
+        "getRootNodeInstId", "getBasePath",
+        "getItemNodeInstId", "getRootNodeSubPath", "getItemNodeSubPath",
+        "getDefaultDocumentEditorPage", "getDefaultDocumentItemEditorPage",
+        "getSubItemNodeInstId", "getSubItemNodeSubPath", "getDefaultDocumentSubItemEditorPage",
+        "getDefaultDocFlowFieldConfigure",
+        "getLoadDocumentBaseURL", "getLoadDocItemBaseURL",  // replaced by getBasePath
+        "getModelTitle", "getItemModelTitle",               // unused in new UI
+        "loadNavigation",                                   // legacy nav — not ported
+        "getItemControlConfig"                              // legacy; items handled by DocItemEditController
+    ));
+
+    /**
+     * Extract all custom static methods from a legacy Manager JS file.
+     * Matches:  XxxManager.methodName = function(params) { body }
+     * Skips methods that are already generated by generateManagerTs.
+     *
+     * @return ordered map of methodName → String[2]: {paramList, brace-block body}
+     */
+    static Map<String, String[]> extractCustomManagerMethods(String js, String rootPascal) {
+        Map<String, String[]> result = new LinkedHashMap<>();
+        Pattern pat = Pattern.compile(
+            "(?m)^" + Pattern.quote(rootPascal) + "Manager\\.(\\w+)\\s*=\\s*function\\s*\\(([^)]*)\\)\\s*\\{");
+        Matcher m = pat.matcher(js);
+        while (m.find()) {
+            String name   = m.group(1);
+            String params = m.group(2).trim();
+            if (FRAMEWORK_MANAGER_METHODS.contains(name)) continue;
+            int braceStart = m.end() - 1;
+            String body = extractBraceBlock(js, braceStart);
+            if (body != null) {
+                result.put(name, new String[]{ params, body });
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Convert a custom Manager static method to TypeScript.
+     * Each JS parameter becomes "paramName: unknown" in the TS signature.
+     * Conversions: "use strict" dropped; var → const.
+     * Everything else (DocumentConstants, ServiceCollectionsHelper, etc.) passes through as-is.
+     */
+    static String convertCustomManagerMethodToTypeScript(String name, String[] paramsAndBody, String rootPascal) {
+        String jsParams = paramsAndBody[0];
+        String jsBody   = paramsAndBody[1];
+
+        // Build TS param list: each JS param becomes "name: unknown"
+        StringBuilder tsParams = new StringBuilder();
+        if (!jsParams.isEmpty()) {
+            String[] paramNames = jsParams.split("\\s*,\\s*");
+            for (int i = 0; i < paramNames.length; i++) {
+                if (i > 0) tsParams.append(", ");
+                tsParams.append(paramNames[i].trim()).append(": unknown");
+            }
+        }
+
+        String inner = jsBody.substring(1, jsBody.length() - 1);
+        inner = inner.replaceAll("^\\n+", "").replaceAll("\\n+$", "");
+
+        inner = inner.replaceAll("(?m)^[ \\t]*\"use strict\";\\s*\\n?", "");
+        inner = inner.replaceAll("(?m)^([ \\t]*)var\\b", "$1const");
+
+        return "\tstatic " + name + "(" + tsParams + "): unknown {\n"
+             + inner + "\n"
+             + "\t}";
+    }
+
+    /**
+     * Append custom static methods before the closing `}` of the class in the
+     * generated Manager.ts content. Skips any method whose name already appears.
+     */
+    static String appendCustomManagerMethods(String content, Map<String, String> converted) {
+        if (converted.isEmpty()) return content;
+
+        StringBuilder toAppend = new StringBuilder();
+        for (Map.Entry<String, String> entry : converted.entrySet()) {
+            String name = entry.getKey();
+            if (content.contains("static " + name + "(") || content.contains(name + "(")) continue;
+            toAppend.append("\n").append(entry.getValue()).append("\n");
+        }
+
+        if (toAppend.length() == 0) return content;
+
+        int lastBrace = content.lastIndexOf('}');
+        if (lastBrace < 0) return content;
+        return content.substring(0, lastBrace)
+                + toAppend
+                + content.substring(lastBrace);
+    }
+
+    static String extractBraceBlock(String src, int start) {
+        int depth = 0;
+        for (int i = start; i < src.length(); i++) {
+            char c = src.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) return src.substring(start, i + 1);
+            }
+        }
+        return null;
     }
 
 }

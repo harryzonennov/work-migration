@@ -17,12 +17,13 @@ Manually copy the Service UI Model interface(s) from the corresponding legacy `*
 
 ## Step 2 — Run the migration tools to generate code resources
 
-Edit `MigrationEntrance.java` (lines `rootNodeInstId`, `itemNodeInstId`, `groupId`, `modelCategory`):
+Edit `MigrationEntrance.java` (lines `rootNodeInstId`, `itemNodeInstId`, `subItemNodeInstId`, `groupId`, `modelCategory`):
 
 ```java
-String rootNodeInstId = "inboundDelivery";   // camelCase target entity name
-String itemNodeInstId = "inboundItem";        // camelCase item entity name, or null if no items
-String groupId        = "logistics";          // target module folder name
+String rootNodeInstId    = "inboundDelivery";            // camelCase target entity name
+String itemNodeInstId    = "inboundItem";                // camelCase item entity name, or null if no items
+String subItemNodeInstId = null;                         // optional 3rd-level sub-item, or null if not needed
+String groupId           = "logistics";                  // target module folder name
 // modelCategory options:
 //   MODEL_CAT_DOCUMENT       — full document with item list (e.g. Inquiry, PurchaseContract)
 //   MODEL_CAT_DUMMY_DOCUMENT — simple document without item list (e.g. Material)
@@ -51,6 +52,19 @@ This generates the following files (skipping any that already exist):
 | `src/services/{groupId}/{Entity}Manager.ts` | Service manager |
 | `src/i18n/locales/en/{groupId}/{Entity}.json` | English i18n labels |
 | `src/i18n/locales/zh/{groupId}/{Entity}.json` | Chinese i18n labels |
+
+**When `subItemNodeInstId` is set**, the following four additional files are also generated (using the item-tier files as the template):
+
+| Generated file | Purpose |
+|---|---|
+| `src/pages/{groupId}/{entity}/{SubItem}Controller.tsx` | Sub-item controller class |
+| `src/pages/{groupId}/{entity}/{SubItem}Panel.tsx` | Sub-item quick-edit panel |
+| `src/pages/{groupId}/{entity}/{SubItem}EditPage.tsx` | Sub-item full-page editor |
+| `src/pages/{groupId}/{entity}/use{SubItem}Controller.ts` | Sub-item controller hook |
+
+The service manager also gains `getI18nSubItemConfig()`, `getSubItemNodeInstId()`, `getSubItemNodeSubPath()`, `getDefaultDocumentSubItemEditorPage()`, and `getDocSubItemPopoverContent()`.
+
+The migrator also reads the legacy `{Item}Control.js` and `{SubItem}Control.js` mixin files (where `getDefaultPageMeta` lives for item-tier controllers) and patches `getDefaultPageMeta()` plus appends custom methods into the generated item and sub-item controller files.
 
 ---
 
@@ -102,3 +116,33 @@ Review each generated controller against its legacy counterpart:
 - Any method not present in the reference template (`Inquiry*`) will have been dropped — re-add them manually
 - Common examples: custom `loadData` hooks, cross-document selection callbacks, computed totals, special save/submit overrides
 - Use `// TODO: legacy <methodName>` stubs if the full implementation is deferred
+
+---
+
+## Step 8 — Wire sub-item panel (3rd-level only)
+
+When `subItemNodeInstId` was set, one manual step remains after the tools run.
+
+The generated `{Item}Panel.tsx` is a plain token-substituted copy; it does not yet pass the
+`renderSubItemPanel` prop that enables the EMBEDLIST section inside it to resolve the sub-panel.
+
+Open `{Item}Panel.tsx` and add the prop:
+
+```tsx
+// Before:
+<EditPanel<...ItemServiceUIModel> ref={ref} config={config} {...props} />
+
+// After:
+const subItemPanelRef = useRef<...SubItemPanelHandle>(null);
+...
+<EditPanel<...ItemServiceUIModel>
+  ref={ref}
+  config={config}
+  renderSubItemPanel={<...SubItemPanel ref={subItemPanelRef} />}
+  {...props}
+/>
+```
+
+Also open `{Item}EditPage.tsx` (the full-page editor) and add `PanelRegistryProvider` + the sub-item panel slot — mirror the pattern in `DocumentEditPage.tsx`.
+
+The `refItemName` value to use is declared in the item controller's `getDefaultPageMeta()` EMBEDLIST section (e.g. `refItemName: 'inspectPropertyItemPanel'`).

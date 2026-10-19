@@ -13,6 +13,13 @@ import java.util.List;
  *   InquiryMaterialItem* → {ItemNodeInstId}*        (PascalCase prefix)
  *   useInquiryMaterialItem* → use{ItemNodeInstId}*  (camelCase hook prefix)
  *
+ * When subItemNodeInstId is set, a second copy pass generates the sub-item
+ * tier files by treating the already-generated item files as the template:
+ *   {ItemNodeInstId}Controller.tsx → {SubItemNodeInstId}Controller.tsx
+ *   {ItemNodeInstId}Panel.tsx      → {SubItemNodeInstId}Panel.tsx
+ *   {ItemNodeInstId}EditPage.tsx   → {SubItemNodeInstId}EditPage.tsx
+ *   use{ItemNodeInstId}Controller.ts → use{SubItemNodeInstId}Controller.ts
+ *
  * Content replacements (longest/most-specific first to avoid partial hits):
  *   InquiryMaterialItem → {ItemNodeInstId_pascal}
  *   inquiryMaterialItem → {itemNodeInstId_camel}
@@ -63,17 +70,43 @@ public class PageModuleCopier {
                                  String itemNodeInstId,
                                  String groupId,
                                  int modelCategory) throws IOException {
+        CopierParams params = new CopierParams(rootNodeInstId, itemNodeInstId, groupId,
+                                               modelCategory, null, null);
+        mainEntry(params);
+    }
+
+    public static void mainEntry(CopierParams params) throws IOException {
+        // ── Pass 1: copy inquiry template → target root/item files ───────────
+        copyPass(params.rootNodeInstId, params.itemNodeInstId,
+                 params.groupId, params.modelCategory);
+
+        // ── Migrate list and editor controllers from legacy source ────────────
+        ListControllerMigrator.migrate(params);
+        EditorControllerMigrator.migrate(params);
+
+        // ── Pass 2 (optional): generate sub-item files from item files ────────
+        if (params.subItemNodeInstId != null && params.itemNodeInstId != null) {
+            copySubItemPass(params.groupId, params.rootNodeInstId,
+                            params.itemNodeInstId, params.subItemNodeInstId);
+            EditorControllerMigrator.migrateItemController(params);
+            EditorControllerMigrator.migrateSubItemController(params);
+        }
+    }
+
+    // ── Pass 1: copy the reference template (inquiry) to the target dir ───────
+
+    static void copyPass(String rootNodeInstId,
+                         String itemNodeInstId,
+                         String groupId,
+                         int modelCategory) throws IOException {
 
         RefConfig ref = resolveRef(modelCategory);
 
-        // ── derive pascal / camel variants ─────────────────────────────────
-        String rootPascal = toPascal(rootNodeInstId);   // e.g. InboundDelivery
-        String rootCamel  = toCamel(rootNodeInstId);    // e.g. inboundDelivery
-
+        String rootPascal = toPascal(rootNodeInstId);
+        String rootCamel  = toCamel(rootNodeInstId);
         String itemPascal = itemNodeInstId != null ? toPascal(itemNodeInstId) : null;
         String itemCamel  = itemNodeInstId != null ? toCamel(itemNodeInstId)  : null;
 
-        // ── source / target dirs ───────────────────────────────────────────
         Path sourceDir = Paths.get(INTELLIGENT_UI_SRC, ref.refPath, ref.refRootNodeInstId);
         Path targetDir = Paths.get(INTELLIGENT_UI_SRC, groupId, rootCamel);
 
@@ -82,7 +115,6 @@ public class PageModuleCopier {
         }
         Files.createDirectories(targetDir);
 
-        // ── iterate source files ───────────────────────────────────────────
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(sourceDir)) {
             for (Path srcFile : stream) {
                 if (!Files.isRegularFile(srcFile)) continue;
@@ -92,7 +124,6 @@ public class PageModuleCopier {
                         itemPascal, itemCamel, itemNodeInstId != null);
 
                 if (newName == null) {
-                    // itemNodeInstId is null and this file belongs to the item — skip
                     System.out.println("Skipping (itemNodeInstId is null): " + originalName);
                     continue;
                 }
@@ -114,13 +145,76 @@ public class PageModuleCopier {
         System.out.println("\nDone. Output: " + targetDir);
     }
 
-    public static void mainEntry(CopierParams params) throws IOException {
-        mainEntry(params.rootNodeInstId, params.itemNodeInstId, params.groupId, params.modelCategory);
-        ListControllerMigrator.migrate(params);
-        EditorControllerMigrator.migrate(params);
+    // ── Pass 2: generate sub-item files from the already-generated item files ──
+    //
+    // The four item-tier files are the perfect template for the sub-item tier:
+    //   {ItemPascal}Controller.tsx    → {SubItemPascal}Controller.tsx
+    //   {ItemPascal}Panel.tsx         → {SubItemPascal}Panel.tsx
+    //   {ItemPascal}EditPage.tsx      → {SubItemPascal}EditPage.tsx
+    //   use{ItemPascal}Controller.ts  → use{SubItemPascal}Controller.ts
+    //
+    // Token replacement inside these files:
+    //   {ItemPascal} → {SubItemPascal}    (e.g. QualityInspectMatItem → QualityInspectPropertyItem)
+    //   {itemCamel}  → {subItemCamel}     (e.g. qualityInspectMatItem → qualityInspectPropertyItem)
+
+    static void copySubItemPass(String groupId,
+                                String rootNodeInstId,
+                                String itemNodeInstId,
+                                String subItemNodeInstId) throws IOException {
+
+        String rootCamel      = toCamel(rootNodeInstId);
+        String itemPascal     = toPascal(itemNodeInstId);
+        String itemCamel      = toCamel(itemNodeInstId);
+        String subItemPascal  = toPascal(subItemNodeInstId);
+        String subItemCamel   = toCamel(subItemNodeInstId);
+
+        Path targetDir = Paths.get(INTELLIGENT_UI_SRC, groupId, rootCamel);
+
+        // The four item-tier files that form the sub-item template
+        String[] itemFileSuffixes = {
+            "Controller.tsx",
+            "Panel.tsx",
+            "EditPage.tsx",
+            "Controller.ts",   // the hook file: use{ItemPascal}Controller.ts
+        };
+
+        System.out.println("\n--- Sub-item pass: " + itemNodeInstId + " → " + subItemNodeInstId + " ---");
+
+        for (String suffix : itemFileSuffixes) {
+            // Determine source file name: hook uses "use" prefix, others use PascalCase directly
+            String srcName = suffix.equals("Controller.ts")
+                    ? "use" + itemPascal + suffix
+                    : itemPascal + suffix;
+            String dstName = suffix.equals("Controller.ts")
+                    ? "use" + subItemPascal + suffix
+                    : subItemPascal + suffix;
+
+            Path srcFile = targetDir.resolve(srcName);
+            Path dstFile = targetDir.resolve(dstName);
+
+            if (!Files.exists(srcFile)) {
+                System.out.println("Skipping sub-item copy (source not found): " + srcName);
+                continue;
+            }
+            if (Files.exists(dstFile)) {
+                System.out.println("Skipping (already exists): " + dstName);
+                continue;
+            }
+
+            String content = Files.readString(srcFile, StandardCharsets.UTF_8);
+
+            // Replace item tokens with sub-item tokens (longest/specific first)
+            content = content.replace(itemPascal, subItemPascal);
+            content = content.replace(itemCamel,  subItemCamel);
+
+            Files.writeString(dstFile, content, StandardCharsets.UTF_8);
+            System.out.println("Generated sub-item: " + srcName + " → " + dstName);
+        }
+
+        System.out.println("Sub-item pass done.");
     }
 
-    // ── file rename ────────────────────────────────────────────────────────
+    // ── file rename ────────────────────────────────────────────────────────────
 
     /**
      * Returns the new file name, or null if the file should be skipped
@@ -157,7 +251,7 @@ public class PageModuleCopier {
         return name;
     }
 
-    // ── content replacement ────────────────────────────────────────────────
+    // ── content replacement ────────────────────────────────────────────────────
 
     static String replaceContent(String content,
                                   RefConfig ref,
@@ -173,7 +267,7 @@ public class PageModuleCopier {
         return content;
     }
 
-    // ── case helpers ───────────────────────────────────────────────────────
+    // ── case helpers ───────────────────────────────────────────────────────────
 
     /** "inboundDelivery" → "InboundDelivery" */
     static String toPascal(String camelCase) {
